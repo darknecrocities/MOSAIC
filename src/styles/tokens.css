@@ -1,0 +1,149 @@
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f9fd;
+  --accent-blue: #69aeeb;
+  --deep-blue: #2878b8;
+  --pale-blue: #eaf5ff;
+  --text-primary: #183247;
+  --text-secondary: #647789;
+  --border: #dfeaf3;
+  --success: #23845b;
+  --warning: #b7791f;
+  --error: #c34c4c;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mosaic-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+.mosaic-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.mosaic-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-size: 18px;
+}
+
+.mosaic-subtitle {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.mosaic-main {
+  flex: 1;
+  padding: var(--space-4);
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.mosaic-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.mosaic-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.mosaic-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--deep-blue);
+  background: var(--deep-blue);
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mosaic-button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.mosaic-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--pale-blue);
+  color: var(--deep-blue);
+}
+
+.mosaic-badge-warn {
+  background: #fef7ea;
+  color: var(--warning);
+}
+
+.mosaic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+.mosaic-kv {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.mosaic-kv:last-child {
+  border-bottom: none;
+}
+
+.mosaic-kv-label {
+  color: var(--text-secondary);
+}
