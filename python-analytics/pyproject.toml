@@ -1,0 +1,33 @@
+[project]
+name = "mosaic-analytics"
+version = "0.1.0"
+description = "MOSAIC local hardware analysis, model-fit estimation, and benchmarking worker"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=6.1.0",
+    "numpy>=2.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mosaic_analytics"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
