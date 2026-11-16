@@ -1,0 +1,29 @@
+name: Feature Request
+description: Propose a new capability, model-fit heuristic improvement, or benchmark enhancement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What limitation or workflow does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How should MOSAIC behave? Note any hardware, storage, or safety considerations.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Hardware Detection & Fit Estimator
+        - External Storage & Ollama Integration
+        - Python Analytics & Benchmarks
+        - Desktop UI & Accessibility
+        - Documentation

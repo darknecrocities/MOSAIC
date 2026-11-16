@@ -1,0 +1,48 @@
+name: Bug Report
+description: Report an unexpected issue in hardware detection, external drive handling, Ollama integration, or UI.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Please avoid sharing personal prompts, secrets, or sensitive local paths.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows 11 / 10 (x64)
+        - Linux (x64)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: ollama_version
+    attributes:
+      label: Ollama Version
+      placeholder: "e.g. 0.40.9"
+    validations:
+      required: true
+  - type: input
+    id: drive_fs
+    attributes:
+      label: External Drive Filesystem & Type
+      placeholder: "e.g. APFS External SSD / exFAT HDD"
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Connect external drive...
+        2. Open MOSAIC...
+    validations:
+      required: true
