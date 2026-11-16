@@ -1,3 +1,5 @@
+![MOSAIC — Run. Analyze. Optimize. Locally.](assets/images/mosaic-banner.jpg)
+
 # MOSAIC
 
 **Modular Orchestration System for Adaptive Inference Clusters**  
