@@ -12,6 +12,10 @@ pub struct CatalogModelEntry {
     pub display_name: String,
     pub provider: String,
     pub parameter_billions: f64,
+    #[serde(default)]
+    pub active_parameter_billions: Option<f64>,
+    #[serde(default)]
+    pub is_moe: bool,
     pub quantization: String,
     pub download_size_bytes: u64,
     pub n_layers: u32,
