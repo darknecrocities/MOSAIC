@@ -53,6 +53,31 @@ pub fn load_curated_catalog() -> Vec<CatalogModelEntry> {
     serde_json::from_str(CURATED_CATALOG_JSON).unwrap_or_default()
 }
 
+/// Optional HTTPS catalog refresh with strict TLS scheme check and offline fallback.
+pub async fn refresh_catalog_https(url: &str) -> Result<Vec<CatalogModelEntry>, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("Catalog refresh URL must use https://.".into());
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(parsed).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Catalog refresh HTTP {}", resp.status()));
+    }
+    let entries = resp
+        .json::<Vec<CatalogModelEntry>>()
+        .await
+        .map_err(|e| format!("Invalid catalog schema: {e}"))?;
+    if entries.is_empty() {
+        return Err("Remote catalog returned zero entries; keeping curated snapshot.".into());
+    }
+    Ok(entries)
+}
+
 pub fn fallback_estimate_fit(
     model: &CatalogModelEntry,
     system: &SystemProfile,

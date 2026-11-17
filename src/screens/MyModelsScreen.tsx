@@ -1,24 +1,33 @@
 import { useState } from 'react';
-import { Play, Trash2 } from 'lucide-react';
+import { Gauge, Play, Trash2 } from 'lucide-react';
+import { BenchmarkPanel } from '../components/benchmarks/BenchmarkPanel';
 import { ConfirmModal } from '../components/common/ConfirmModal';
-import type { InstalledModel } from '../types/ipc';
+import type { BenchmarkReportRecord, InstalledModel } from '../types/ipc';
 import { formatGiB } from '../utils/format';
 
 interface MyModelsScreenProps {
   models: InstalledModel[];
+  reports: BenchmarkReportRecord[];
   loading: boolean;
   libraryConnected: boolean;
+  benchmarkingModel: string | null;
   onRefresh: () => void;
   onLaunchModel: (modelName: string) => void;
+  onRunBenchmark: (modelName: string) => Promise<void>;
+  onExportReport: (reportId: string, format: 'json' | 'csv' | 'html') => void;
   onDeleteModel: (modelName: string) => Promise<void>;
 }
 
 export function MyModelsScreen({
   models,
+  reports,
   loading,
   libraryConnected,
+  benchmarkingModel,
   onRefresh,
   onLaunchModel,
+  onRunBenchmark,
+  onExportReport,
   onDeleteModel,
 }: MyModelsScreenProps) {
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
@@ -78,6 +87,15 @@ export function MyModelsScreen({
                   <button
                     type="button"
                     className="mosaic-button-secondary"
+                    disabled={!libraryConnected || benchmarkingModel !== null}
+                    onClick={() => void onRunBenchmark(m.name)}
+                    aria-label={`Benchmark ${m.name}`}
+                  >
+                    <Gauge size={15} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="mosaic-button-secondary"
                     disabled={!libraryConnected}
                     onClick={() => setConfirmTarget(m.name)}
                     aria-label={`Delete ${m.name}`}
@@ -90,6 +108,12 @@ export function MyModelsScreen({
           </div>
         )}
       </section>
+
+      <BenchmarkPanel
+        reports={reports}
+        benchmarkingModel={benchmarkingModel}
+        onExport={onExportReport}
+      />
 
       <ConfirmModal
         open={confirmTarget !== null}
