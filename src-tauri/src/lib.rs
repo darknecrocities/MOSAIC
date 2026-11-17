@@ -69,6 +69,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_spike_diagnostics,
             commands::get_app_state,
+            commands::get_telemetry,
             commands::select_external_library,
             commands::update_setting,
             commands::get_diagnostics,

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Lock, Send, Square } from 'lucide-react';
-import type { ChatMessage, InstalledModel } from '../types/ipc';
+import { Activity, Lock, Send, Square } from 'lucide-react';
+import type { ChatMessage, InstalledModel, ResourceTelemetry } from '../types/ipc';
+import { formatGiB } from '../utils/format';
 
 interface RunModelScreenProps {
   models: InstalledModel[];
@@ -9,6 +10,7 @@ interface RunModelScreenProps {
   ollamaReachable: boolean;
   streaming: boolean;
   messages: ChatMessage[];
+  telemetry?: ResourceTelemetry | null;
   onSelectModel: (name: string) => void;
   onSendMessage: (prompt: string, numCtx: number, temperature: number) => void;
   onStopGeneration: () => void;
@@ -22,6 +24,7 @@ export function RunModelScreen({
   ollamaReachable,
   streaming,
   messages,
+  telemetry,
   onSelectModel,
   onSendMessage,
   onStopGeneration,
@@ -51,12 +54,23 @@ export function RunModelScreen({
               In-memory session (conversations are not persisted by default)
             </span>
           </div>
-          {ollamaReachable && (
-            <span className="mosaic-badge mosaic-badge-success">
-              <Lock size={12} aria-hidden="true" />
-              <span>Running locally through Ollama</span>
-            </span>
-          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {telemetry && (
+              <span className="mosaic-badge">
+                <Activity size={12} aria-hidden="true" />
+                <span>
+                  {formatGiB(telemetry.ram_available_bytes)} free /{' '}
+                  {formatGiB(telemetry.ram_total_bytes)}
+                </span>
+              </span>
+            )}
+            {ollamaReachable && (
+              <span className="mosaic-badge mosaic-badge-success">
+                <Lock size={12} aria-hidden="true" />
+                <span>Running locally through Ollama</span>
+              </span>
+            )}
+          </div>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>

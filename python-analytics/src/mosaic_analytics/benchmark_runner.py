@@ -52,6 +52,8 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     repetitions = max(2, min(10, int(params.get("repetitions") or 3)))
     context_length = max(512, int(params.get("context_length") or 4096))
     prompt = str(params.get("prompt") or FIXED_PROMPT)
+    cold_timeout_s = float(params.get("cold_load_timeout_s") or 180.0)
+    warm_timeout_s = float(params.get("warm_load_timeout_s") or 120.0)
 
     idle_vm = psutil.virtual_memory()
     idle_available = int(idle_vm.available)
@@ -86,6 +88,7 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
                 "stream": False,
                 "options": {"num_ctx": context_length, "temperature": 0.0, "num_predict": 64},
             },
+            timeout_s=cold_timeout_s if idx == 0 else warm_timeout_s,
         )
         load_ms = float(res.get("load_duration", 0)) / 1e6
         prompt_eval_ms = float(res.get("prompt_eval_duration", 0)) / 1e6
