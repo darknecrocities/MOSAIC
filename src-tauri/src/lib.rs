@@ -1,10 +1,14 @@
+pub mod commands;
 pub mod core;
 pub mod security;
 
 use serde::Serialize;
+use tauri::Manager;
 
+use crate::commands::AppState;
 use crate::core::ollama_manager::{self, OllamaStatus};
 use crate::core::python_analytics_service::{self, AnalyticsHealth};
+use crate::core::settings_store::SettingsStore;
 use crate::core::system_probe::{self, SystemProfile};
 use crate::core::volume_manager::{self, ExternalVolume};
 
@@ -45,7 +49,23 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_spike_diagnostics])
+        .setup(|app| {
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("mosaic"));
+            let db_path = data_dir.join("mosaic.db");
+            let store = SettingsStore::open(&db_path)?;
+            app.manage(AppState { store });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_spike_diagnostics,
+            commands::get_app_state,
+            commands::select_external_library,
+            commands::update_setting,
+            commands::get_diagnostics,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running MOSAIC Tauri application");
 }
