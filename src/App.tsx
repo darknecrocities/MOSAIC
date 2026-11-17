@@ -2,15 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { OnboardingGate } from './components/onboarding/OnboardingGate';
 import { ExternalStorageScreen } from './screens/ExternalStorageScreen';
+import { DiscoverModelsScreen } from './screens/DiscoverModelsScreen';
 import { HardwareScreen } from './screens/HardwareScreen';
 import { OverviewScreen } from './screens/OverviewScreen';
 import { PlaceholderScreen } from './screens/PlaceholderScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
-import type { AppBootstrapState, NavRoute } from './types/ipc';
+import type { AppBootstrapState, CatalogModelWithFit, NavRoute } from './types/ipc';
 
 export function App() {
   const [route, setRoute] = useState<NavRoute>('overview');
   const [state, setState] = useState<AppBootstrapState | null>(null);
+  const [catalog, setCatalog] = useState<CatalogModelWithFit[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
+  const [contextLength, setContextLength] = useState<number>(4096);
   const [loading, setLoading] = useState<boolean>(false);
   const [selecting, setSelecting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +38,27 @@ export function App() {
   useEffect(() => {
     void loadState();
   }, [loadState]);
+
+  const loadCatalog = useCallback(async (ctxLen: number) => {
+    setCatalogLoading(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const items = await invoke<CatalogModelWithFit[]>('list_catalog_with_fit', {
+        contextLength: ctxLen,
+      });
+      setCatalog(items);
+    } catch {
+      // Catalog stays empty in non-Tauri browser preview.
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (route === 'discover') {
+      void loadCatalog(contextLength);
+    }
+  }, [route, contextLength, loadCatalog]);
 
   const handleSelectVolume = async (volumeIdentifier: string) => {
     setSelecting(true);
@@ -94,11 +119,14 @@ export function App() {
         <SettingsScreen settings={state.settings} onSaveSetting={handleSaveSetting} />
       )}
       {route === 'discover' && (
-        <PlaceholderScreen
-          title="Discover Models"
-          description="Curated Ollama catalog and hardware-aware KV-cache fit rankings arrive in Milestone C."
-          requiresDrive
+        <DiscoverModelsScreen
+          items={catalog}
+          loading={catalogLoading}
+          contextLength={contextLength}
           libraryConnected={Boolean(state?.library_connected)}
+          freeBytes={state?.active_library?.free_bytes ?? 0}
+          pullingName={null}
+          onChangeContextLength={setContextLength}
         />
       )}
       {route === 'my-models' && (
