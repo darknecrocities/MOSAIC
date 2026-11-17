@@ -21,6 +21,14 @@ export interface SystemProfile {
   detected_at: string;
 }
 
+export interface ResourceTelemetry {
+  cpu_usage_percent: number;
+  ram_total_bytes: number;
+  ram_available_bytes: number;
+  ram_used_bytes: number;
+  sampled_at: string;
+}
+
 export interface ExternalVolume {
   volume_identifier: string;
   label: string;
@@ -32,6 +40,19 @@ export interface ExternalVolume {
   free_bytes: number;
   writable: boolean;
   advisory: string | null;
+}
+
+export interface ActiveLibraryRecord {
+  volume_identifier: string;
+  label: string;
+  mount_path: string;
+  filesystem: string;
+  media_kind: string;
+  directory_path: string;
+  ollama_configured: boolean;
+  free_bytes: number;
+  total_bytes: number;
+  verified_at: string;
 }
 
 export interface OllamaStatus {
@@ -55,9 +76,29 @@ export interface AnalyticsHealth {
   error: string | null;
 }
 
-export interface SpikeReport {
+export interface AppSettingsSnapshot {
+  safety_reserve_gib: number;
+  ollama_endpoint: string;
+  telemetry_poll_ms: number;
+  ollama_management_mode: string;
+}
+
+export interface AppBootstrapState {
   system: SystemProfile;
+  telemetry: ResourceTelemetry;
   external_volumes: ExternalVolume[];
+  active_library: ActiveLibraryRecord | null;
+  library_connected: boolean;
   ollama: OllamaStatus;
   analytics: AnalyticsHealth;
+  settings: AppSettingsSnapshot;
 }
+
+export type NavRoute =
+  | 'overview'
+  | 'discover'
+  | 'my-models'
+  | 'run'
+  | 'hardware'
+  | 'storage'
+  | 'settings';
