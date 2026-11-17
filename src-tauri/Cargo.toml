@@ -5,6 +5,7 @@ description = "MOSAIC: Modular Orchestration System for Adaptive Inference Clust
 authors = ["MOSAIC Contributors"]
 license = "Apache-2.0"
 edition = "2021"
+default-run = "mosaic"
 
 [lib]
 name = "mosaic_lib"

@@ -30,6 +30,11 @@ pub struct AppBootstrapState {
 }
 
 #[tauri::command]
+pub fn get_telemetry() -> ResourceTelemetry {
+    telemetry::sample_resources()
+}
+
+#[tauri::command]
 pub async fn get_app_state(state: State<'_, AppState>) -> Result<AppBootstrapState, String> {
     let settings = state.store.get_settings().map_err(|e| e.to_string())?;
     let system = system_probe::probe_system();

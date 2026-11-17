@@ -16,6 +16,7 @@ import type {
   InstalledModel,
   NavRoute,
   PullProgressEvent,
+  ResourceTelemetry,
 } from './types/ipc';
 
 export function App() {
@@ -34,29 +35,34 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const sessionRef = useRef<string>('session-1');
 
+  const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
   const loadState = useCallback(async () => {
+    if (!isTauri()) {
+      setNotice('Browser preview mode: launch the MOSAIC desktop window to access live hardware, external drives, and Ollama.');
+      return;
+    }
     setLoading(true);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const next = await invoke<AppBootstrapState>('get_app_state');
       setState(next);
     } catch (err) {
-      setNotice(
-        err instanceof Error ? err.message : 'Tauri native core unavailable in browser preview.'
-      );
+      setNotice(err instanceof Error ? err.message : 'Failed to query MOSAIC native core.');
     } finally {
       setLoading(false);
     }
   }, []);
 
   const loadInstalled = useCallback(async () => {
+    if (!isTauri()) return;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const list = await invoke<InstalledModel[]>('list_installed_models');
       setInstalled(list);
       if (!selectedModel && list.length > 0) setSelectedModel(list[0].name);
     } catch {
-      // Ollama offline or browser preview.
+      // Ollama offline.
     }
   }, [selectedModel]);
 
@@ -64,6 +70,23 @@ export function App() {
     void loadState();
     void loadInstalled();
   }, [loadState, loadInstalled]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const intervalMs = state?.settings.telemetry_poll_ms ?? 5000;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const telemetry = await invoke<ResourceTelemetry>('get_telemetry');
+          setState((prev) => (prev ? { ...prev, telemetry } : prev));
+        } catch {
+          // Ignore transient polling errors.
+        }
+      })();
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [state?.settings.telemetry_poll_ms]);
 
   useEffect(() => {
     let unlistenPull: (() => void) | undefined;
@@ -237,13 +260,24 @@ export function App() {
           ollamaReachable={Boolean(state?.ollama.api_reachable)}
           streaming={streaming}
           messages={messages}
+          telemetry={state?.telemetry}
           onSelectModel={setSelectedModel}
           onSendMessage={(p, c, t) => void handleSendMessage(p, c, t)}
           onStopGeneration={() => void invokeAndRefresh('stop_chat_stream')}
           onUnloadModel={() => void invokeAndRefresh('unload_model', { model: selectedModel })}
         />
       )}
-      {state && route === 'hardware' && <HardwareScreen state={state} />}
+      {route === 'hardware' &&
+        (state ? (
+          <HardwareScreen state={state} />
+        ) : (
+          <section className="mosaic-panel" aria-labelledby="hw-empty">
+            <h2 id="hw-empty">Hardware &amp; Memory Profile</h2>
+            <p className="mosaic-subtitle">
+              Hardware telemetry requires the native MOSAIC Tauri runtime.
+            </p>
+          </section>
+        ))}
       {state && route === 'storage' && (
         <ExternalStorageScreen
           state={state}
