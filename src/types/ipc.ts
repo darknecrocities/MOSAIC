@@ -110,6 +110,8 @@ export interface CatalogModelEntry {
   display_name: string;
   provider: string;
   parameter_billions: number;
+  active_parameter_billions?: number | null;
+  is_moe?: boolean;
   quantization: string;
   download_size_bytes: number;
   n_layers: number;
@@ -139,4 +141,78 @@ export interface ModelFitAssessment {
 export interface CatalogModelWithFit {
   model: CatalogModelEntry;
   fit: ModelFitAssessment;
+}
+
+export interface InstalledModel {
+  name: string;
+  size_bytes: number;
+  digest: string;
+  modified_at: string;
+  family: string | null;
+  parameter_size: string | null;
+  quantization_level: string | null;
+}
+
+export interface PullProgressEvent {
+  model: string;
+  status: string;
+  completed: number | null;
+  total: number | null;
+  done: boolean;
+  error: string | null;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface ChatTokenEvent {
+  session_id: string;
+  token: string;
+  done: boolean;
+  error: string | null;
+}
+
+export interface ClusterWorker {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  vram_bytes: number;
+  ram_available_bytes: number;
+  backend: string;
+  status: string;
+  rtt_ms: number | null;
+  created_at: string;
+}
+
+export interface NodeAllocation {
+  name: string;
+  role: string;
+  endpoint: string;
+  allocated_bytes: number;
+  budget_bytes: number;
+}
+
+export interface ClusterPlan {
+  strategy: string;
+  feasible: boolean;
+  is_moe: boolean;
+  total_demand_bytes: number;
+  tier1_gpu_bytes: number;
+  tier2_ram_bytes: number;
+  tier3_disk_mmap_bytes: number;
+  node_allocations: NodeAllocation[];
+  runtime_flags: string[];
+  warnings: string[];
+}
+
+export interface MigrationPreview {
+  source_dir: string;
+  exists: boolean;
+  blob_count: number;
+  manifest_count: number;
+  total_bytes: number;
+  fits_on_external: boolean;
 }

@@ -5,11 +5,11 @@
   --deep-blue: #2878b8;
   --pale-blue: #eaf5ff;
   --text-primary: #183247;
-  --text-secondary: #647789;
+  --text-secondary: #516578;
   --border: #dfeaf3;
-  --success: #23845b;
-  --warning: #b7791f;
-  --error: #c34c4c;
+  --success: #1f7450;
+  --warning: #8f5a0b;
+  --error: #b53b3b;
 
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --space-1: 4px;
@@ -216,13 +216,14 @@ body {
 }
 
 .mosaic-input {
-  min-height: 44px;
+  height: 44px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg-primary);
   color: var(--text-primary);
   font-size: 14px;
+  line-height: 42px;
 }
 
 .mosaic-badge {

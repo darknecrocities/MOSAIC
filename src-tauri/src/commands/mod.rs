@@ -1,3 +1,6 @@
+pub mod cluster;
+pub mod runtime;
+
 use serde::Serialize;
 use tauri::State;
 
@@ -25,6 +28,11 @@ pub struct AppBootstrapState {
     pub ollama: OllamaStatus,
     pub analytics: AnalyticsHealth,
     pub settings: AppSettingsSnapshot,
+}
+
+#[tauri::command]
+pub fn get_telemetry() -> ResourceTelemetry {
+    telemetry::sample_resources()
 }
 
 #[tauri::command]

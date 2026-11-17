@@ -10,6 +10,7 @@ use crate::core::system_probe::SystemProfile;
 use crate::core::volume_manager::{ExternalVolume, LibraryValidationResult};
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
+const CLUSTER_MIGRATION: &str = include_str!("../../migrations/0002_cluster.sql");
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -74,6 +75,7 @@ impl SettingsStore {
         }
         let conn = Connection::open(db_path)?;
         conn.execute_batch(INITIAL_MIGRATION)?;
+        conn.execute_batch(CLUSTER_MIGRATION)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -82,6 +84,7 @@ impl SettingsStore {
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(INITIAL_MIGRATION)?;
+        conn.execute_batch(CLUSTER_MIGRATION)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -304,6 +307,14 @@ impl SettingsStore {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn with_conn<F, T>(&self, f: F) -> Result<T, StoreError>
+    where
+        F: FnOnce(&Connection) -> Result<T, rusqlite::Error>,
+    {
+        let conn = self.conn.lock().map_err(|_| StoreError::LockPoisoned)?;
+        f(&conn).map_err(Into::into)
     }
 }
 

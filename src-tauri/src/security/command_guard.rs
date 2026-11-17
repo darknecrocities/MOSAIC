@@ -8,6 +8,9 @@ use super::SecurityError;
 
 const ALLOWED_BINARIES: &[&str] = &[
     "ollama",
+    "llama-server",
+    "llama-cli",
+    "rpc-server",
     "system_profiler",
     "diskutil",
     "launchctl",

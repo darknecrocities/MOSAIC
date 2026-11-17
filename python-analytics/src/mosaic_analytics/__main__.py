@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from mosaic_analytics.benchmark_runner import run_benchmark
+from mosaic_analytics.cluster_planner import plan_cluster
 from mosaic_analytics.hardware_analyzer import analyze_hardware
 from mosaic_analytics.model_fit_analyzer import assess_model_fit
 from mosaic_analytics.performance_analyzer import analyze_performance
 from mosaic_analytics.protocol import NdjsonWorker
+from mosaic_analytics.report_exporter import export_report
 
 
 def build_worker() -> NdjsonWorker:
@@ -14,6 +17,9 @@ def build_worker() -> NdjsonWorker:
     worker.register("analyze_hardware", analyze_hardware)
     worker.register("estimate_fit", assess_model_fit)
     worker.register("analyze_performance", analyze_performance)
+    worker.register("run_benchmark", run_benchmark)
+    worker.register("export_report", export_report)
+    worker.register("plan_cluster", plan_cluster)
     return worker
 
 

@@ -58,10 +58,130 @@ pub fn list_external_volumes() -> Result<Vec<ExternalVolume>, VolumeError> {
     Ok(parse_macos_storage_json(&parsed))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub fn list_external_volumes() -> Result<Vec<ExternalVolume>, VolumeError> {
-    // Non-macOS native volume adapters will be implemented in Milestone B/E.
+    let output = command_guard::run_allowlisted(
+        Path::new("lsblk"),
+        &[
+            "-J",
+            "-b",
+            "-o",
+            "NAME,LABEL,UUID,FSTYPE,MOUNTPOINT,SIZE,FSAVAIL,TRAN,ROTA,RM,RO",
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(VolumeError::ProbeFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| VolumeError::ProbeFailed(e.to_string()))?;
+    Ok(parse_linux_lsblk_json(&parsed))
+}
+
+#[cfg(target_os = "windows")]
+pub fn list_external_volumes() -> Result<Vec<ExternalVolume>, VolumeError> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let mut volumes = Vec::new();
+    for disk in disks.list() {
+        if !disk.is_removable() || disk.total_space() == 0 {
+            continue;
+        }
+        let mount_path = disk.mount_point().display().to_string();
+        let filesystem = disk.file_system().to_string_lossy().to_string();
+        let writable = !disk.is_read_only();
+        let media_kind = match disk.kind() {
+            sysinfo::DiskKind::SSD => "SSD",
+            sysinfo::DiskKind::HDD => "HDD",
+            _ => "unknown",
+        }
+        .to_string();
+        let label = disk.name().to_string_lossy().to_string();
+        let advisory = build_volume_advisory(&filesystem, &media_kind, writable);
+        volumes.push(ExternalVolume {
+            volume_identifier: mount_path.clone(),
+            label: if label.is_empty() {
+                mount_path.clone()
+            } else {
+                label
+            },
+            mount_path,
+            filesystem,
+            protocol: "USB/Removable".to_string(),
+            media_kind,
+            total_bytes: disk.total_space(),
+            free_bytes: disk.available_space(),
+            writable,
+            advisory,
+        });
+    }
+    Ok(volumes)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub fn list_external_volumes() -> Result<Vec<ExternalVolume>, VolumeError> {
     Ok(Vec::new())
+}
+
+pub fn parse_linux_lsblk_json(parsed: &serde_json::Value) -> Vec<ExternalVolume> {
+    let mut volumes = Vec::new();
+    if let Some(devices) = parsed.get("blockdevices").and_then(|v| v.as_array()) {
+        collect_linux_devices(devices, false, "unknown", false, &mut volumes);
+    }
+    volumes
+}
+
+fn collect_linux_devices(
+    devices: &[serde_json::Value],
+    parent_removable: bool,
+    parent_tran: &str,
+    parent_rota: bool,
+    out: &mut Vec<ExternalVolume>,
+) {
+    for dev in devices {
+        let tran = dev.get("tran").and_then(|v| v.as_str()).unwrap_or(parent_tran);
+        let rm = dev.get("rm").and_then(|v| v.as_bool()).unwrap_or(false)
+            || parent_removable
+            || tran.eq_ignore_ascii_case("usb")
+            || tran.eq_ignore_ascii_case("thunderbolt");
+        let rota = dev.get("rota").and_then(|v| v.as_bool()).unwrap_or(parent_rota);
+
+        if let Some(mount) = dev.get("mountpoint").and_then(|v| v.as_str()) {
+            let fstype = dev.get("fstype").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let ro = dev.get("ro").and_then(|v| v.as_bool()).unwrap_or(false);
+            if rm && !mount.is_empty() && mount != "/" && !mount.starts_with("/boot") && fstype != "squashfs" {
+                let media_kind = if rota { "HDD" } else { "SSD" }.to_string();
+                let writable = !ro;
+                let advisory = build_volume_advisory(fstype, &media_kind, writable);
+                let label = dev
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| dev.get("name").and_then(|v| v.as_str()))
+                    .unwrap_or("External")
+                    .to_string();
+                let uuid = dev
+                    .get("uuid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(mount)
+                    .to_string();
+                out.push(ExternalVolume {
+                    volume_identifier: uuid,
+                    label,
+                    mount_path: mount.to_string(),
+                    filesystem: fstype.to_string(),
+                    protocol: tran.to_string(),
+                    media_kind,
+                    total_bytes: dev.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+                    free_bytes: dev.get("fsavail").and_then(|v| v.as_u64()).unwrap_or(0),
+                    writable,
+                    advisory,
+                });
+            }
+        }
+        if let Some(children) = dev.get("children").and_then(|v| v.as_array()) {
+            collect_linux_devices(children, rm, tran, rota, out);
+        }
+    }
 }
 
 pub fn parse_macos_storage_json(parsed: &serde_json::Value) -> Vec<ExternalVolume> {
@@ -163,6 +283,49 @@ pub fn validate_library_path(volume: &ExternalVolume) -> Result<LibraryValidatio
     })
 }
 
+/// Safely eject an external volume after verifying no active model operations are running.
+pub fn prepare_safe_eject(mount_path: &str, active_ops: bool) -> Result<String, VolumeError> {
+    if active_ops {
+        return Err(VolumeError::ProbeFailed(
+            "Stop active model downloads or inference before ejecting.".to_string(),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let out = command_guard::run_allowlisted(
+            Path::new("/usr/sbin/diskutil"),
+            &["eject", mount_path],
+        )?;
+        if !out.status.success() {
+            return Err(VolumeError::ProbeFailed(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        Ok(format!("Volume at {mount_path} is safe to remove."))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let out = command_guard::run_allowlisted(
+            Path::new("udisksctl"),
+            &["unmount", "-b", mount_path],
+        )?;
+        if !out.status.success() {
+            return Err(VolumeError::ProbeFailed(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        Ok(format!("Volume at {mount_path} unmounted safely."))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = mount_path;
+        Ok("Active operations stopped; use OS Safely Remove Hardware to eject.".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +371,36 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].volume_identifier, "EXT-UUID-99");
         assert_eq!(found[0].media_kind, "SSD");
+    }
+
+    #[test]
+    fn parses_linux_lsblk_usb_and_skips_root() {
+        let fixture = serde_json::json!({
+            "blockdevices": [
+                {
+                    "name": "nvme0n1",
+                    "tran": "nvme",
+                    "rm": false,
+                    "rota": false,
+                    "children": [
+                        { "name": "nvme0n1p1", "mountpoint": "/", "fstype": "ext4", "ro": false, "size": 500_000_000_000u64, "fsavail": 200_000_000_000u64 }
+                    ]
+                },
+                {
+                    "name": "sda",
+                    "tran": "usb",
+                    "rm": true,
+                    "rota": true,
+                    "children": [
+                        { "name": "sda1", "label": "OneTouch", "uuid": "LIN-UUID-1", "mountpoint": "/media/user/OneTouch", "fstype": "exfat", "ro": false, "size": 1_000_000_000_000u64, "fsavail": 600_000_000_000u64 }
+                    ]
+                }
+            ]
+        });
+
+        let found = parse_linux_lsblk_json(&fixture);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].volume_identifier, "LIN-UUID-1");
+        assert_eq!(found[0].media_kind, "HDD");
     }
 }

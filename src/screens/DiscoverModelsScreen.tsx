@@ -115,6 +115,14 @@ export function DiscoverModelsScreen({
 
       {loading ? (
         <p className="mosaic-subtitle">Evaluating model compatibility...</p>
+      ) : filtered.length === 0 ? (
+        <section className="mosaic-panel-white" role="status">
+          <p className="mosaic-subtitle" style={{ margin: 0 }}>
+            {items.length === 0
+              ? 'Model catalog unavailable in browser preview. Launch the MOSAIC desktop app to evaluate models against your hardware.'
+              : 'No models match the selected search query or compatibility filter.'}
+          </p>
+        </section>
       ) : (
         <div className="mosaic-grid">
           {filtered.map((item) => (
