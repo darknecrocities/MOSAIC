@@ -8,11 +8,9 @@ use tauri::State;
 use crate::core::model_catalog::{self, CatalogModelWithFit};
 use crate::core::ollama_manager::{self, OllamaStatus};
 use crate::core::python_analytics_service::{self, AnalyticsHealth};
-use crate::core::settings_store::{
-    ActiveLibraryRecord, AppSettingsSnapshot, DiagnosticEntry, SettingsStore,
-};
+use crate::core::settings_store::{ActiveLibraryRecord, AppSettingsSnapshot, SettingsStore};
 use crate::core::system_probe::{self, SystemProfile};
-use crate::core::telemetry::{self, ResourceTelemetry};
+use crate::core::telemetry::{self, DiagnosticEntry, ResourceTelemetry};
 use crate::core::volume_manager::{self, ExternalVolume};
 
 pub struct AppState {
@@ -84,7 +82,8 @@ pub async fn select_external_library(
         .store
         .save_active_library(&selected, &validation)
         .map_err(|e| e.to_string())?;
-    let _ = state.store.log_diagnostic(
+    let _ = telemetry::log_diagnostic(
+        &state.store,
         "info",
         "volume_manager",
         &format!("Validated external model library on {}", selected.label),
@@ -116,9 +115,7 @@ pub fn get_diagnostics(
     limit: Option<usize>,
     state: State<'_, AppState>,
 ) -> Result<Vec<DiagnosticEntry>, String> {
-    state
-        .store
-        .list_diagnostics(limit.unwrap_or(50).min(200))
+    telemetry::list_diagnostics(&state.store, limit.unwrap_or(50).min(200))
         .map_err(|e| e.to_string())
 }
 
