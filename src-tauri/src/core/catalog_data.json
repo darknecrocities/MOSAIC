@@ -132,6 +132,40 @@
     "default_context": 4096,
     "license_name": "MIT",
     "license_url": "https://ollama.com/library/deepseek-r1",
-    "summary": "Large 70B reasoning model requiring server/workstation memory."
+    "summary": "Large 70B reasoning model suited for workstation or multi-node RPC memory pooling."
+  },
+  {
+    "ollama_name": "mixtral:8x22b-instruct-q4_K_M",
+    "display_name": "Mixtral 8x22B MoE",
+    "provider": "Mistral AI",
+    "parameter_billions": 141.0,
+    "active_parameter_billions": 39.0,
+    "is_moe": true,
+    "quantization": "Q4_K_M",
+    "download_size_bytes": 80000000000,
+    "n_layers": 56,
+    "n_kv_heads": 8,
+    "head_dim": 128,
+    "default_context": 4096,
+    "license_name": "Apache-2.0",
+    "license_url": "https://ollama.com/library/mixtral",
+    "summary": "Sparse 141B MoE (39B active); supports GPU attention + CPU expert offloading or RPC pooling."
+  },
+  {
+    "ollama_name": "qwen3:235b-a22b-q4_K_M",
+    "display_name": "Qwen 3 235B-A22B MoE",
+    "provider": "Alibaba",
+    "parameter_billions": 235.0,
+    "active_parameter_billions": 22.0,
+    "is_moe": true,
+    "quantization": "Q4_K_M",
+    "download_size_bytes": 134000000000,
+    "n_layers": 94,
+    "n_kv_heads": 4,
+    "head_dim": 128,
+    "default_context": 4096,
+    "license_name": "Apache-2.0",
+    "license_url": "https://ollama.com/library/qwen3",
+    "summary": "235B sparse MoE (22B active); requires multi-node GGML_RPC pooling or MoE expert tiering."
   }
 ]

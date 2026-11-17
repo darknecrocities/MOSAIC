@@ -1,0 +1,85 @@
+use serde::Deserialize;
+use tauri::State;
+
+use crate::commands::AppState;
+use crate::core::cluster_manager::{self, ClusterPlan, ClusterWorker};
+use crate::core::model_catalog;
+use crate::core::system_probe;
+
+#[derive(Debug, Deserialize)]
+pub struct AddWorkerRequest {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub vram_gib: f64,
+    pub ram_gib: f64,
+    pub backend: String,
+    pub allow_lan: bool,
+}
+
+#[tauri::command]
+pub fn list_cluster_workers(state: State<'_, AppState>) -> Result<Vec<ClusterWorker>, String> {
+    cluster_manager::list_workers(&state.store).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_cluster_worker(
+    request: AddWorkerRequest,
+    state: State<'_, AppState>,
+) -> Result<ClusterWorker, String> {
+    let gib = 1024_f64.powi(3);
+    cluster_manager::add_worker(
+        &state.store,
+        &request.name,
+        &request.host,
+        request.port,
+        (request.vram_gib.max(0.0) * gib) as u64,
+        (request.ram_gib.max(0.0) * gib) as u64,
+        &request.backend,
+        request.allow_lan,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_cluster_worker(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    cluster_manager::remove_worker(&state.store, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn probe_cluster_workers(
+    state: State<'_, AppState>,
+) -> Result<Vec<ClusterWorker>, String> {
+    cluster_manager::probe_workers(&state.store)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn plan_adaptive_execution(
+    ollama_name: String,
+    context_length: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<ClusterPlan, String> {
+    let catalog = model_catalog::load_curated_catalog();
+    let model = catalog
+        .into_iter()
+        .find(|m| m.ollama_name == ollama_name)
+        .ok_or_else(|| format!("Model '{ollama_name}' not found in catalog"))?;
+
+    let settings = state.store.get_settings().map_err(|e| e.to_string())?;
+    let active_library = state.store.get_active_library().map_err(|e| e.to_string())?;
+    let workers = cluster_manager::list_workers(&state.store).map_err(|e| e.to_string())?;
+    let system = system_probe::probe_system();
+    let media_kind = active_library.as_ref().map(|l| l.media_kind.as_str());
+
+    cluster_manager::compute_cluster_plan(
+        &model,
+        &system,
+        &workers,
+        context_length.unwrap_or(4096),
+        settings.safety_reserve_gib,
+        media_kind,
+    )
+    .await
+}

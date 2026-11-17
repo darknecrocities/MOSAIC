@@ -83,6 +83,11 @@ pub fn run() {
             commands::runtime::unload_model,
             commands::runtime::configure_ollama_storage,
             commands::runtime::prepare_safe_eject,
+            commands::cluster::list_cluster_workers,
+            commands::cluster::add_cluster_worker,
+            commands::cluster::remove_cluster_worker,
+            commands::cluster::probe_cluster_workers,
+            commands::cluster::plan_adaptive_execution,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MOSAIC Tauri application");
