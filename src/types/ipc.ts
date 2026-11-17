@@ -207,3 +207,12 @@ export interface ClusterPlan {
   runtime_flags: string[];
   warnings: string[];
 }
+
+export interface MigrationPreview {
+  source_dir: string;
+  exists: boolean;
+  blob_count: number;
+  manifest_count: number;
+  total_bytes: number;
+  fits_on_external: boolean;
+}

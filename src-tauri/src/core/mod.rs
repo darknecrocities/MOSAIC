@@ -1,6 +1,7 @@
 pub mod cluster_manager;
 pub mod download_manager;
 pub mod inference_manager;
+pub mod migration;
 pub mod model_catalog;
 pub mod model_library;
 pub mod ollama_manager;
