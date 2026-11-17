@@ -44,12 +44,24 @@ pub struct AnalyticsHealth {
 }
 
 pub fn locate_python_project_dir() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let candidates = [
-        cwd.join("python-analytics"),
-        cwd.parent().map(|p| p.join("python-analytics")).unwrap_or_default(),
-    ];
-    candidates.into_iter().find(|p| p.join("pyproject.toml").is_file())
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // macOS .app/Contents/Resources/python-analytics
+            candidates.push(exe_dir.join("../Resources/python-analytics"));
+            // Windows/Linux bundled resources
+            candidates.push(exe_dir.join("resources/python-analytics"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("python-analytics"));
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("python-analytics"));
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|p| p.join("pyproject.toml").is_file())
 }
 
 pub fn locate_python_binary(project_dir: &Path) -> Option<PathBuf> {
