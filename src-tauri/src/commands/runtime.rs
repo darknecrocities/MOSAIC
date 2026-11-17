@@ -3,6 +3,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::commands::AppState;
 use crate::core::download_manager::DownloadRegistry;
 use crate::core::inference_manager::{self, ChatStreamRequest, InferenceRegistry};
+use crate::core::migration::{self, MigrationPreview, MigrationResult};
 use crate::core::model_library::{self, InstalledModel};
 use crate::core::ollama_manager;
 use crate::core::volume_manager;
@@ -140,4 +141,28 @@ pub fn prepare_safe_eject(
     let active_ops = runtime.downloads.has_active() || runtime.inference.is_running();
     volume_manager::prepare_safe_eject(&active_library.mount_path, active_ops)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn preview_internal_migration(state: State<'_, AppState>) -> Result<MigrationPreview, String> {
+    let active_library = state.store.get_active_library().map_err(|e| e.to_string())?;
+    let free = active_library.map(|l| l.free_bytes).unwrap_or(0);
+    Ok(migration::preview_internal_migration(free))
+}
+
+#[tauri::command]
+pub fn execute_internal_migration(
+    confirmed: bool,
+    state: State<'_, AppState>,
+) -> Result<MigrationResult, String> {
+    let active_library = state
+        .store
+        .get_active_library()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Select an external model library before migrating.".to_string())?;
+    migration::copy_internal_models(
+        std::path::Path::new(&active_library.directory_path),
+        active_library.free_bytes,
+        confirmed,
+    )
 }

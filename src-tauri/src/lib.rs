@@ -83,6 +83,8 @@ pub fn run() {
             commands::runtime::unload_model,
             commands::runtime::configure_ollama_storage,
             commands::runtime::prepare_safe_eject,
+            commands::runtime::preview_internal_migration,
+            commands::runtime::execute_internal_migration,
             commands::cluster::list_cluster_workers,
             commands::cluster::add_cluster_worker,
             commands::cluster::remove_cluster_worker,
