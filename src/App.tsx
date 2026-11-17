@@ -1,164 +1,123 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, Cpu, HardDrive, RefreshCw, Terminal } from 'lucide-react';
-import type { SpikeReport } from './types/ipc';
-
-function formatGiB(bytes: number): string {
-  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
-}
+import { AppShell } from './components/layout/AppShell';
+import { OnboardingGate } from './components/onboarding/OnboardingGate';
+import { ExternalStorageScreen } from './screens/ExternalStorageScreen';
+import { HardwareScreen } from './screens/HardwareScreen';
+import { OverviewScreen } from './screens/OverviewScreen';
+import { PlaceholderScreen } from './screens/PlaceholderScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
+import type { AppBootstrapState, NavRoute } from './types/ipc';
 
 export function App() {
-  const [report, setReport] = useState<SpikeReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [route, setRoute] = useState<NavRoute>('overview');
+  const [state, setState] = useState<AppBootstrapState | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [selecting, setSelecting] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const loadDiagnostics = useCallback(async () => {
+  const loadState = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const data = await invoke<SpikeReport>('get_spike_diagnostics');
-      setReport(data);
+      const next = await invoke<AppBootstrapState>('get_app_state');
+      setState(next);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Tauri runtime unavailable in browser preview.';
-      setError(message);
+      setError(
+        err instanceof Error ? err.message : 'Tauri native core unavailable in browser preview.'
+      );
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadDiagnostics();
-  }, [loadDiagnostics]);
+    void loadState();
+  }, [loadState]);
+
+  const handleSelectVolume = async (volumeIdentifier: string) => {
+    setSelecting(true);
+    setError(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('select_external_library', { volumeIdentifier });
+      await loadState();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to validate external volume.');
+    } finally {
+      setSelecting(false);
+    }
+  };
+
+  const handleSaveSetting = async (key: string, value: unknown) => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('update_setting', { key, value });
+    await loadState();
+  };
+
+  const showOnboarding = !state || !state.library_connected;
 
   return (
-    <div className="mosaic-shell">
-      <header className="mosaic-topbar">
-        <div>
-          <div className="mosaic-brand">
-            <Cpu size={20} color="#2878B8" aria-hidden="true" />
-            <span>MOSAIC</span>
-          </div>
-          <div className="mosaic-subtitle">
-            Local-first model orchestration with mandatory external storage
-          </div>
-        </div>
-        <button
-          type="button"
-          className="mosaic-button"
-          onClick={() => void loadDiagnostics()}
-          disabled={loading}
-          aria-label="Refresh system and runtime diagnostics"
-        >
-          <RefreshCw size={16} aria-hidden="true" />
-          <span>{loading ? 'Scanning...' : 'Rescan Host'}</span>
-        </button>
-      </header>
+    <AppShell
+      activeRoute={route}
+      onNavigate={setRoute}
+      state={state}
+      loading={loading}
+      onRefresh={() => void loadState()}
+    >
+      {error && (
+        <section className="mosaic-panel" role="status" aria-live="polite">
+          <strong>Runtime notice:</strong> {error}
+        </section>
+      )}
 
-      <main className="mosaic-main">
-        {error && (
-          <section className="mosaic-panel" role="status" aria-live="polite">
-            <strong>Runtime notice:</strong> {error}
-          </section>
-        )}
+      {showOnboarding && route !== 'hardware' && route !== 'settings' && (
+        <OnboardingGate
+          volumes={state?.external_volumes ?? []}
+          selecting={selecting}
+          onSelectVolume={(id) => void handleSelectVolume(id)}
+          onInspectHardware={() => setRoute('hardware')}
+        />
+      )}
 
-        <div className="mosaic-grid">
-          <section className="mosaic-panel" aria-labelledby="heading-hardware">
-            <div className="mosaic-panel-header">
-              <h2 id="heading-hardware">System Probe</h2>
-              <Activity size={18} color="#2878B8" aria-hidden="true" />
-            </div>
-            {report ? (
-              <div>
-                <div className="mosaic-kv">
-                  <span className="mosaic-kv-label">OS / Arch</span>
-                  <span>
-                    {report.system.os_name} ({report.system.architecture})
-                  </span>
-                </div>
-                <div className="mosaic-kv">
-                  <span className="mosaic-kv-label">CPU</span>
-                  <span>{report.system.cpu_brand}</span>
-                </div>
-                <div className="mosaic-kv">
-                  <span className="mosaic-kv-label">Memory</span>
-                  <span>
-                    {formatGiB(report.system.ram_available_bytes)} free /{' '}
-                    {formatGiB(report.system.ram_total_bytes)}
-                  </span>
-                </div>
-                <div className="mosaic-kv">
-                  <span className="mosaic-kv-label">GPU Mode</span>
-                  <span className="mosaic-badge">{report.system.gpu_status}</span>
-                </div>
-              </div>
-            ) : (
-              <p className="mosaic-subtitle">Awaiting native probe from Tauri core.</p>
-            )}
-          </section>
-
-          <section className="mosaic-panel" aria-labelledby="heading-storage">
-            <div className="mosaic-panel-header">
-              <h2 id="heading-storage">External Model Library</h2>
-              <HardDrive size={18} color="#2878B8" aria-hidden="true" />
-            </div>
-            {report && report.external_volumes.length > 0 ? (
-              report.external_volumes.map((vol) => (
-                <div key={vol.volume_identifier} className="mosaic-kv">
-                  <span className="mosaic-kv-label">
-                    {vol.label} ({vol.filesystem})
-                  </span>
-                  <span>{formatGiB(vol.free_bytes)} free</span>
-                </div>
-              ))
-            ) : (
-              <p className="mosaic-subtitle">
-                No external drive selected. Connect an external HDD or SSD to enable model
-                downloads; internal disk fallback is disabled.
-              </p>
-            )}
-          </section>
-
-          <section className="mosaic-panel" aria-labelledby="heading-runtime">
-            <div className="mosaic-panel-header">
-              <h2 id="heading-runtime">Ollama &amp; Analytics</h2>
-              <Terminal size={18} color="#2878B8" aria-hidden="true" />
-            </div>
-            {report ? (
-              <div>
-                <div className="mosaic-kv">
-                  <span className="mosaic-kv-label">Ollama API</span>
-                  <span
-                    className={
-                      report.ollama.api_reachable
-                        ? 'mosaic-badge'
-                        : 'mosaic-badge mosaic-badge-warn'
-                    }
-                  >
-                    {report.ollama.api_reachable ? 'Reachable' : 'Offline'}
-                  </span>
-                </div>
-                <div className="mosaic-kv">
-                  <span className="mosaic-kv-label">Python Worker</span>
-                  <span
-                    className={
-                      report.analytics.available
-                        ? 'mosaic-badge'
-                        : 'mosaic-badge mosaic-badge-warn'
-                    }
-                  >
-                    {report.analytics.available
-                      ? `v${report.analytics.service_version ?? '1.0'}`
-                      : 'Unavailable'}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <p className="mosaic-subtitle">Awaiting Ollama and Python worker status.</p>
-            )}
-          </section>
-        </div>
-      </main>
-    </div>
+      {state && route === 'overview' && <OverviewScreen state={state} onNavigate={setRoute} />}
+      {state && route === 'hardware' && <HardwareScreen state={state} />}
+      {state && route === 'storage' && (
+        <ExternalStorageScreen
+          state={state}
+          selecting={selecting}
+          onSelectVolume={(id) => void handleSelectVolume(id)}
+          onInspectHardware={() => setRoute('hardware')}
+        />
+      )}
+      {state && route === 'settings' && (
+        <SettingsScreen settings={state.settings} onSaveSetting={handleSaveSetting} />
+      )}
+      {route === 'discover' && (
+        <PlaceholderScreen
+          title="Discover Models"
+          description="Curated Ollama catalog and hardware-aware KV-cache fit rankings arrive in Milestone C."
+          requiresDrive
+          libraryConnected={Boolean(state?.library_connected)}
+        />
+      )}
+      {route === 'my-models' && (
+        <PlaceholderScreen
+          title="My Models"
+          description="Installed external-drive model inventory and verified removal controls arrive in Milestone D."
+          requiresDrive
+          libraryConnected={Boolean(state?.library_connected)}
+        />
+      )}
+      {route === 'run' && (
+        <PlaceholderScreen
+          title="Run Model"
+          description="Local streaming chat and runtime memory controls arrive in Milestone D."
+          requiresDrive
+          libraryConnected={Boolean(state?.library_connected)}
+        />
+      )}
+    </AppShell>
   );
 }
 
