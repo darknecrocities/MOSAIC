@@ -1,3 +1,4 @@
+pub mod benchmark_store;
 pub mod cluster_manager;
 pub mod download_manager;
 pub mod inference_manager;
