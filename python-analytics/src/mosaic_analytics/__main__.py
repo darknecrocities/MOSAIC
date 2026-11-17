@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from mosaic_analytics.hardware_analyzer import analyze_hardware
+from mosaic_analytics.model_fit_analyzer import assess_model_fit
+from mosaic_analytics.performance_analyzer import analyze_performance
 from mosaic_analytics.protocol import NdjsonWorker
 
 
@@ -10,6 +12,8 @@ def build_worker() -> NdjsonWorker:
     """Create and configure the analytics worker with supported handlers."""
     worker = NdjsonWorker()
     worker.register("analyze_hardware", analyze_hardware)
+    worker.register("estimate_fit", assess_model_fit)
+    worker.register("analyze_performance", analyze_performance)
     return worker
 
 

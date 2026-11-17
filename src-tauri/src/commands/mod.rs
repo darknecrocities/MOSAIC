@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::core::model_catalog::{self, CatalogModelWithFit};
 use crate::core::ollama_manager::{self, OllamaStatus};
 use crate::core::python_analytics_service::{self, AnalyticsHealth};
 use crate::core::settings_store::{
@@ -110,4 +111,24 @@ pub fn get_diagnostics(
         .store
         .list_diagnostics(limit.unwrap_or(50).min(200))
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_catalog_with_fit(
+    context_length: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<Vec<CatalogModelWithFit>, String> {
+    let settings = state.store.get_settings().map_err(|e| e.to_string())?;
+    let active_library = state.store.get_active_library().map_err(|e| e.to_string())?;
+    let system = system_probe::probe_system();
+    let media_kind = active_library.as_ref().map(|lib| lib.media_kind.as_str());
+    let ctx = context_length.unwrap_or(4096).clamp(512, 131_072);
+
+    Ok(model_catalog::evaluate_catalog(
+        &system,
+        ctx,
+        settings.safety_reserve_gib,
+        media_kind,
+    )
+    .await)
 }

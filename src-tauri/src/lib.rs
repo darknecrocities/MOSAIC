@@ -65,6 +65,7 @@ pub fn run() {
             commands::select_external_library,
             commands::update_setting,
             commands::get_diagnostics,
+            commands::list_catalog_with_fit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MOSAIC Tauri application");
