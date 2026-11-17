@@ -1,6 +1,8 @@
-import { X } from 'lucide-react';
-import type { CatalogModelWithFit } from '../../types/ipc';
+import { useEffect, useState } from 'react';
+import { Layers, X } from 'lucide-react';
+import type { CatalogModelWithFit, ClusterPlan } from '../../types/ipc';
 import { formatGiB } from '../../utils/format';
+import { ClusterPlanPanel } from '../cluster/ClusterPlanPanel';
 import { FitBadge } from './FitBadge';
 
 interface ModelDetailDrawerProps {
@@ -9,8 +11,34 @@ interface ModelDetailDrawerProps {
 }
 
 export function ModelDetailDrawer({ item, onClose }: ModelDetailDrawerProps) {
+  const [clusterPlan, setClusterPlan] = useState<ClusterPlan | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setClusterPlan(null);
+    setPlanError(null);
+  }, [item?.model.ollama_name]);
+
   if (!item) return null;
   const { model, fit } = item;
+
+  const handleComputePlan = async () => {
+    setPlanning(true);
+    setPlanError(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const plan = await invoke<ClusterPlan>('plan_adaptive_execution', {
+        ollamaName: model.ollama_name,
+        contextLength: fit.context_length,
+      });
+      setClusterPlan(plan);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : 'Cluster planner requires Tauri runtime.');
+    } finally {
+      setPlanning(false);
+    }
+  };
 
   return (
     <div
@@ -19,12 +47,15 @@ export function ModelDetailDrawer({ item, onClose }: ModelDetailDrawerProps) {
       aria-modal="true"
       aria-labelledby="detail-drawer-title"
     >
-      <div className="mosaic-modal">
+      <div className="mosaic-modal" style={{ maxHeight: '88vh', overflowY: 'auto' }}>
         <div className="mosaic-panel-header">
           <div>
             <h2 id="detail-drawer-title">{model.display_name}</h2>
             <span className="mosaic-subtitle">
               <code>{model.ollama_name}</code>
+              {model.is_moe && model.active_parameter_billions
+                ? ` · MoE (${model.active_parameter_billions}B active / ${model.parameter_billions}B total)`
+                : ''}
             </span>
           </div>
           <button
@@ -80,6 +111,25 @@ export function ModelDetailDrawer({ item, onClose }: ModelDetailDrawerProps) {
             </li>
           ))}
         </ul>
+
+        <div style={{ marginTop: 12 }}>
+          <button
+            type="button"
+            className="mosaic-button-secondary"
+            disabled={planning}
+            onClick={() => void handleComputePlan()}
+          >
+            <Layers size={15} aria-hidden="true" />
+            <span>{planning ? 'Computing Plan...' : 'Compute Adaptive / Cluster Plan'}</span>
+          </button>
+        </div>
+
+        {planError && (
+          <p className="mosaic-subtitle" style={{ marginTop: 8 }}>
+            {planError}
+          </p>
+        )}
+        {clusterPlan && <ClusterPlanPanel plan={clusterPlan} />}
       </div>
     </div>
   );
