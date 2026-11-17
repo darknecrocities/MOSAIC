@@ -163,6 +163,49 @@ pub fn validate_library_path(volume: &ExternalVolume) -> Result<LibraryValidatio
     })
 }
 
+/// Safely eject an external volume after verifying no active model operations are running.
+pub fn prepare_safe_eject(mount_path: &str, active_ops: bool) -> Result<String, VolumeError> {
+    if active_ops {
+        return Err(VolumeError::ProbeFailed(
+            "Stop active model downloads or inference before ejecting.".to_string(),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let out = command_guard::run_allowlisted(
+            Path::new("/usr/sbin/diskutil"),
+            &["eject", mount_path],
+        )?;
+        if !out.status.success() {
+            return Err(VolumeError::ProbeFailed(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        Ok(format!("Volume at {mount_path} is safe to remove."))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let out = command_guard::run_allowlisted(
+            Path::new("udisksctl"),
+            &["unmount", "-b", mount_path],
+        )?;
+        if !out.status.success() {
+            return Err(VolumeError::ProbeFailed(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        Ok(format!("Volume at {mount_path} unmounted safely."))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = mount_path;
+        Ok("Active operations stopped; use OS Safely Remove Hardware to eject.".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

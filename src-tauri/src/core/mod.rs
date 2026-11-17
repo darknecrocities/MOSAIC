@@ -1,4 +1,7 @@
+pub mod download_manager;
+pub mod inference_manager;
 pub mod model_catalog;
+pub mod model_library;
 pub mod ollama_manager;
 pub mod python_analytics_service;
 pub mod settings_store;

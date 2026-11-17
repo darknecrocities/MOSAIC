@@ -5,7 +5,10 @@ pub mod security;
 use serde::Serialize;
 use tauri::Manager;
 
+use crate::commands::runtime::RuntimeState;
 use crate::commands::AppState;
+use crate::core::download_manager::DownloadRegistry;
+use crate::core::inference_manager::InferenceRegistry;
 use crate::core::ollama_manager::{self, OllamaStatus};
 use crate::core::python_analytics_service::{self, AnalyticsHealth};
 use crate::core::settings_store::SettingsStore;
@@ -57,6 +60,10 @@ pub fn run() {
             let db_path = data_dir.join("mosaic.db");
             let store = SettingsStore::open(&db_path)?;
             app.manage(AppState { store });
+            app.manage(RuntimeState {
+                downloads: DownloadRegistry::default(),
+                inference: InferenceRegistry::default(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +73,15 @@ pub fn run() {
             commands::update_setting,
             commands::get_diagnostics,
             commands::list_catalog_with_fit,
+            commands::runtime::pull_model,
+            commands::runtime::cancel_pull,
+            commands::runtime::list_installed_models,
+            commands::runtime::delete_installed_model,
+            commands::runtime::start_chat_stream,
+            commands::runtime::stop_chat_stream,
+            commands::runtime::unload_model,
+            commands::runtime::configure_ollama_storage,
+            commands::runtime::prepare_safe_eject,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MOSAIC Tauri application");

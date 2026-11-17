@@ -145,6 +145,36 @@ pub fn parse_cli_version(raw: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
+/// Configure OLLAMA_MODELS with an explicit backup of prior configuration.
+pub fn configure_ollama_models_dir(
+    library_path: &str,
+    backup_dir: &Path,
+    confirmed: bool,
+) -> Result<String, String> {
+    if !confirmed {
+        return Err("Explicit user confirmation is required before changing OLLAMA_MODELS.".into());
+    }
+    let _ = std::fs::create_dir_all(backup_dir);
+    let prev = read_launchd_ollama_models().unwrap_or_else(|| "<unset>".to_string());
+    let backup_path = backup_dir.join("ollama_models_backup.txt");
+    std::fs::write(&backup_path, format!("previous_OLLAMA_MODELS={prev}\n"))
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let out = command_guard::run_allowlisted(
+            Path::new("/bin/launchctl"),
+            &["setenv", "OLLAMA_MODELS", library_path],
+        )
+        .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+    }
+
+    Ok(backup_path.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
