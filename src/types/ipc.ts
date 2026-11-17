@@ -140,3 +140,34 @@ export interface CatalogModelWithFit {
   model: CatalogModelEntry;
   fit: ModelFitAssessment;
 }
+
+export interface InstalledModel {
+  name: string;
+  size_bytes: number;
+  digest: string;
+  modified_at: string;
+  family: string | null;
+  parameter_size: string | null;
+  quantization_level: string | null;
+}
+
+export interface PullProgressEvent {
+  model: string;
+  status: string;
+  completed: number | null;
+  total: number | null;
+  done: boolean;
+  error: string | null;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface ChatTokenEvent {
+  session_id: string;
+  token: string;
+  done: boolean;
+  error: string | null;
+}

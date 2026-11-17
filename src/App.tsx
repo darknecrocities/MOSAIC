@@ -1,33 +1,47 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { OnboardingGate } from './components/onboarding/OnboardingGate';
-import { ExternalStorageScreen } from './screens/ExternalStorageScreen';
 import { DiscoverModelsScreen } from './screens/DiscoverModelsScreen';
+import { ExternalStorageScreen } from './screens/ExternalStorageScreen';
 import { HardwareScreen } from './screens/HardwareScreen';
+import { MyModelsScreen } from './screens/MyModelsScreen';
 import { OverviewScreen } from './screens/OverviewScreen';
-import { PlaceholderScreen } from './screens/PlaceholderScreen';
+import { RunModelScreen } from './screens/RunModelScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
-import type { AppBootstrapState, CatalogModelWithFit, NavRoute } from './types/ipc';
+import type {
+  AppBootstrapState,
+  CatalogModelWithFit,
+  ChatMessage,
+  ChatTokenEvent,
+  InstalledModel,
+  NavRoute,
+  PullProgressEvent,
+} from './types/ipc';
 
 export function App() {
   const [route, setRoute] = useState<NavRoute>('overview');
   const [state, setState] = useState<AppBootstrapState | null>(null);
   const [catalog, setCatalog] = useState<CatalogModelWithFit[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
+  const [installed, setInstalled] = useState<InstalledModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [streaming, setStreaming] = useState<boolean>(false);
+  const [pullProgress, setPullProgress] = useState<PullProgressEvent | null>(null);
   const [contextLength, setContextLength] = useState<number>(4096);
   const [loading, setLoading] = useState<boolean>(false);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
   const [selecting, setSelecting] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const sessionRef = useRef<string>('session-1');
 
   const loadState = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const next = await invoke<AppBootstrapState>('get_app_state');
       setState(next);
     } catch (err) {
-      setError(
+      setNotice(
         err instanceof Error ? err.message : 'Tauri native core unavailable in browser preview.'
       );
     } finally {
@@ -35,49 +49,125 @@ export function App() {
     }
   }, []);
 
+  const loadInstalled = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const list = await invoke<InstalledModel[]>('list_installed_models');
+      setInstalled(list);
+      if (!selectedModel && list.length > 0) setSelectedModel(list[0].name);
+    } catch {
+      // Ollama offline or browser preview.
+    }
+  }, [selectedModel]);
+
   useEffect(() => {
     void loadState();
-  }, [loadState]);
-
-  const loadCatalog = useCallback(async (ctxLen: number) => {
-    setCatalogLoading(true);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const items = await invoke<CatalogModelWithFit[]>('list_catalog_with_fit', {
-        contextLength: ctxLen,
-      });
-      setCatalog(items);
-    } catch {
-      // Catalog stays empty in non-Tauri browser preview.
-    } finally {
-      setCatalogLoading(false);
-    }
-  }, []);
+    void loadInstalled();
+  }, [loadState, loadInstalled]);
 
   useEffect(() => {
-    if (route === 'discover') {
-      void loadCatalog(contextLength);
-    }
-  }, [route, contextLength, loadCatalog]);
+    let unlistenPull: (() => void) | undefined;
+    let unlistenChat: (() => void) | undefined;
 
-  const handleSelectVolume = async (volumeIdentifier: string) => {
-    setSelecting(true);
-    setError(null);
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlistenPull = await listen<PullProgressEvent>('mosaic://pull-progress', (ev) => {
+          setPullProgress(ev.payload);
+          if (ev.payload.done) void loadInstalled();
+        });
+        unlistenChat = await listen<ChatTokenEvent>('mosaic://chat-token', (ev) => {
+          if (ev.payload.error) {
+            setNotice(ev.payload.error);
+            setStreaming(false);
+            return;
+          }
+          if (ev.payload.token) {
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.role === 'assistant') {
+                return [...prev.slice(0, -1), { ...last, content: last.content + ev.payload.token }];
+              }
+              return [...prev, { role: 'assistant', content: ev.payload.token }];
+            });
+          }
+          if (ev.payload.done) setStreaming(false);
+        });
+      } catch {
+        // Non-Tauri browser preview.
+      }
+    })();
+
+    return () => {
+      unlistenPull?.();
+      unlistenChat?.();
+    };
+  }, [loadInstalled]);
+
+  useEffect(() => {
+    if (route !== 'discover') return;
+    setCatalogLoading(true);
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const items = await invoke<CatalogModelWithFit[]>('list_catalog_with_fit', {
+          contextLength,
+        });
+        setCatalog(items);
+      } catch {
+        // Browser preview fallback.
+      } finally {
+        setCatalogLoading(false);
+      }
+    })();
+  }, [route, contextLength]);
+
+  const invokeAndRefresh = async (cmd: string, args?: Record<string, unknown>, okMsg?: string) => {
+    setNotice(null);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('select_external_library', { volumeIdentifier });
+      const res = await invoke<string>(cmd, args);
+      if (okMsg) setNotice(typeof res === 'string' && res ? res : okMsg);
       await loadState();
+      await loadInstalled();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to validate external volume.');
-    } finally {
-      setSelecting(false);
+      setNotice(err instanceof Error ? err.message : String(err));
     }
   };
 
-  const handleSaveSetting = async (key: string, value: unknown) => {
-    const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('update_setting', { key, value });
-    await loadState();
+  const handleSelectVolume = async (volumeIdentifier: string) => {
+    setSelecting(true);
+    await invokeAndRefresh('select_external_library', { volumeIdentifier });
+    setSelecting(false);
+  };
+
+  const handlePullModel = async (ollamaName: string) => {
+    const found = catalog.find((c) => c.model.ollama_name === ollamaName);
+    await invokeAndRefresh('pull_model', {
+      model: ollamaName,
+      estimatedBytes: found?.model.download_size_bytes ?? null,
+    });
+  };
+
+  const handleSendMessage = async (prompt: string, numCtx: number, temperature: number) => {
+    const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: prompt }];
+    setMessages(nextMessages);
+    setStreaming(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('start_chat_stream', {
+        request: {
+          session_id: sessionRef.current,
+          model: selectedModel,
+          messages: nextMessages,
+          num_ctx: numCtx,
+          temperature,
+        },
+      });
+    } catch (err) {
+      setStreaming(false);
+      setNotice(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const showOnboarding = !state || !state.library_connected;
@@ -88,14 +178,21 @@ export function App() {
       onNavigate={setRoute}
       state={state}
       loading={loading}
-      onRefresh={() => void loadState()}
+      onRefresh={() => {
+        void loadState();
+        void loadInstalled();
+      }}
     >
-      {error && (
+      {notice && (
         <section className="mosaic-panel" role="status" aria-live="polite">
-          <strong>Runtime notice:</strong> {error}
+          <strong>Status:</strong> {notice}
         </section>
       )}
-
+      {pullProgress && !pullProgress.done && (
+        <section className="mosaic-panel" role="status">
+          Pulling <strong>{pullProgress.model}</strong>: {pullProgress.status}
+        </section>
+      )}
       {showOnboarding && route !== 'hardware' && route !== 'settings' && (
         <OnboardingGate
           volumes={state?.external_volumes ?? []}
@@ -104,20 +201,7 @@ export function App() {
           onInspectHardware={() => setRoute('hardware')}
         />
       )}
-
       {state && route === 'overview' && <OverviewScreen state={state} onNavigate={setRoute} />}
-      {state && route === 'hardware' && <HardwareScreen state={state} />}
-      {state && route === 'storage' && (
-        <ExternalStorageScreen
-          state={state}
-          selecting={selecting}
-          onSelectVolume={(id) => void handleSelectVolume(id)}
-          onInspectHardware={() => setRoute('hardware')}
-        />
-      )}
-      {state && route === 'settings' && (
-        <SettingsScreen settings={state.settings} onSaveSetting={handleSaveSetting} />
-      )}
       {route === 'discover' && (
         <DiscoverModelsScreen
           items={catalog}
@@ -125,24 +209,63 @@ export function App() {
           contextLength={contextLength}
           libraryConnected={Boolean(state?.library_connected)}
           freeBytes={state?.active_library?.free_bytes ?? 0}
-          pullingName={null}
+          pullingName={pullProgress && !pullProgress.done ? pullProgress.model : null}
           onChangeContextLength={setContextLength}
+          onPullModel={(name) => void handlePullModel(name)}
         />
       )}
       {route === 'my-models' && (
-        <PlaceholderScreen
-          title="My Models"
-          description="Installed external-drive model inventory and verified removal controls arrive in Milestone D."
-          requiresDrive
+        <MyModelsScreen
+          models={installed}
+          loading={loading}
           libraryConnected={Boolean(state?.library_connected)}
+          onRefresh={() => void loadInstalled()}
+          onLaunchModel={(name) => {
+            setSelectedModel(name);
+            setRoute('run');
+          }}
+          onDeleteModel={(name) =>
+            invokeAndRefresh('delete_installed_model', { model: name, confirmed: true })
+          }
         />
       )}
       {route === 'run' && (
-        <PlaceholderScreen
-          title="Run Model"
-          description="Local streaming chat and runtime memory controls arrive in Milestone D."
-          requiresDrive
+        <RunModelScreen
+          models={installed}
+          selectedModel={selectedModel}
           libraryConnected={Boolean(state?.library_connected)}
+          ollamaReachable={Boolean(state?.ollama.api_reachable)}
+          streaming={streaming}
+          messages={messages}
+          onSelectModel={setSelectedModel}
+          onSendMessage={(p, c, t) => void handleSendMessage(p, c, t)}
+          onStopGeneration={() => void invokeAndRefresh('stop_chat_stream')}
+          onUnloadModel={() => void invokeAndRefresh('unload_model', { model: selectedModel })}
+        />
+      )}
+      {state && route === 'hardware' && <HardwareScreen state={state} />}
+      {state && route === 'storage' && (
+        <ExternalStorageScreen
+          state={state}
+          selecting={selecting}
+          onSelectVolume={(id) => void handleSelectVolume(id)}
+          onInspectHardware={() => setRoute('hardware')}
+          onConfigureOllamaStorage={() =>
+            invokeAndRefresh(
+              'configure_ollama_storage',
+              { confirmed: true },
+              'OLLAMA_MODELS configured.'
+            )
+          }
+          onSafeEject={() =>
+            invokeAndRefresh('prepare_safe_eject', undefined, 'Drive is safe to remove.')
+          }
+        />
+      )}
+      {state && route === 'settings' && (
+        <SettingsScreen
+          settings={state.settings}
+          onSaveSetting={(key, value) => invokeAndRefresh('update_setting', { key, value })}
         />
       )}
     </AppShell>
