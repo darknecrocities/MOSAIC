@@ -7,6 +7,7 @@ use tauri::Manager;
 
 use crate::commands::runtime::RuntimeState;
 use crate::commands::AppState;
+use crate::core::cluster_manager::ClusterRuntimeRegistry;
 use crate::core::download_manager::DownloadRegistry;
 use crate::core::inference_manager::InferenceRegistry;
 use crate::core::ollama_manager::{self, OllamaStatus};
@@ -64,6 +65,7 @@ pub fn run() {
                 downloads: DownloadRegistry::default(),
                 inference: InferenceRegistry::default(),
             });
+            app.manage(ClusterRuntimeRegistry::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -90,6 +92,11 @@ pub fn run() {
             commands::cluster::remove_cluster_worker,
             commands::cluster::probe_cluster_workers,
             commands::cluster::plan_adaptive_execution,
+            commands::cluster::launch_cluster_runtime,
+            commands::cluster::stop_cluster_runtime,
+            commands::benchmarks::run_model_benchmark,
+            commands::benchmarks::list_benchmark_reports,
+            commands::benchmarks::export_benchmark_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MOSAIC Tauri application");

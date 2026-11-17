@@ -10,6 +10,7 @@ import { RunModelScreen } from './screens/RunModelScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import type {
   AppBootstrapState,
+  BenchmarkReportRecord,
   CatalogModelWithFit,
   ChatMessage,
   ChatTokenEvent,
@@ -24,6 +25,8 @@ export function App() {
   const [state, setState] = useState<AppBootstrapState | null>(null);
   const [catalog, setCatalog] = useState<CatalogModelWithFit[]>([]);
   const [installed, setInstalled] = useState<InstalledModel[]>([]);
+  const [reports, setReports] = useState<BenchmarkReportRecord[]>([]);
+  const [benchmarkingModel, setBenchmarkingModel] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState<boolean>(false);
@@ -66,10 +69,21 @@ export function App() {
     }
   }, [selectedModel]);
 
+  const loadReports = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      setReports(await invoke<BenchmarkReportRecord[]>('list_benchmark_reports'));
+    } catch {
+      // Ignore if DB unavailable.
+    }
+  }, []);
+
   useEffect(() => {
     void loadState();
     void loadInstalled();
-  }, [loadState, loadInstalled]);
+    void loadReports();
+  }, [loadState, loadInstalled, loadReports]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -193,6 +207,40 @@ export function App() {
     }
   };
 
+  const handleRunBenchmark = async (modelName: string) => {
+    setBenchmarkingModel(modelName);
+    setNotice(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('run_model_benchmark', { model: modelName, contextLength, repetitions: 2 });
+      await loadReports();
+      setNotice(`Benchmark complete for ${modelName}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBenchmarkingModel(null);
+    }
+  };
+
+  const handleExportReport = async (reportId: string, format: 'json' | 'csv' | 'html') => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const res = await invoke<{ format: string; content: string }>('export_benchmark_report', {
+        reportId,
+        format,
+      });
+      const blob = new Blob([res.content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mosaic-benchmark-${reportId.slice(0, 8)}.${res.format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const showOnboarding = !state || !state.library_connected;
 
   return (
@@ -240,13 +288,17 @@ export function App() {
       {route === 'my-models' && (
         <MyModelsScreen
           models={installed}
+          reports={reports}
           loading={loading}
           libraryConnected={Boolean(state?.library_connected)}
+          benchmarkingModel={benchmarkingModel}
           onRefresh={() => void loadInstalled()}
           onLaunchModel={(name) => {
             setSelectedModel(name);
             setRoute('run');
           }}
+          onRunBenchmark={handleRunBenchmark}
+          onExportReport={(id, fmt) => void handleExportReport(id, fmt)}
           onDeleteModel={(name) =>
             invokeAndRefresh('delete_installed_model', { model: name, confirmed: true })
           }

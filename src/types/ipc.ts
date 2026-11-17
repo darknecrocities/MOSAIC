@@ -216,3 +216,18 @@ export interface MigrationPreview {
   total_bytes: number;
   fits_on_external: boolean;
 }
+
+export interface BenchmarkReportRecord {
+  id: string;
+  model_name: string;
+  context_length: number;
+  storage_media_kind: string;
+  cold_load_ms: number | null;
+  warm_load_ms: number | null;
+  ttft_median_ms: number | null;
+  tok_per_sec_median: number | null;
+  peak_ram_bytes: number | null;
+  repetitions: number;
+  raw_report_json: string;
+  created_at: string;
+}

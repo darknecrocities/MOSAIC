@@ -2,7 +2,7 @@ use serde::Deserialize;
 use tauri::State;
 
 use crate::commands::AppState;
-use crate::core::cluster_manager::{self, ClusterPlan, ClusterWorker};
+use crate::core::cluster_manager::{self, ClusterPlan, ClusterRuntimeRegistry, ClusterWorker};
 use crate::core::model_catalog;
 use crate::core::system_probe;
 
@@ -82,4 +82,30 @@ pub async fn plan_adaptive_execution(
         media_kind,
     )
     .await
+}
+
+#[tauri::command]
+pub fn launch_cluster_runtime(
+    gguf_rel_path: String,
+    runtime_flags: Vec<String>,
+    confirmed: bool,
+    state: State<'_, AppState>,
+    cluster_rt: State<'_, ClusterRuntimeRegistry>,
+) -> Result<String, String> {
+    let active_library = state
+        .store
+        .get_active_library()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "External model library required before launching cluster runtime.".to_string())?;
+    cluster_rt.launch_llama_server(
+        std::path::Path::new(&active_library.directory_path),
+        &gguf_rel_path,
+        &runtime_flags,
+        confirmed,
+    )
+}
+
+#[tauri::command]
+pub fn stop_cluster_runtime(cluster_rt: State<'_, ClusterRuntimeRegistry>) -> bool {
+    cluster_rt.stop()
 }
