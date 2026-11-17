@@ -154,11 +154,17 @@ pub fn configure_ollama_models_dir(
     if !confirmed {
         return Err("Explicit user confirmation is required before changing OLLAMA_MODELS.".into());
     }
+    if library_path.trim().is_empty() {
+        return Err("External library path cannot be empty.".into());
+    }
     let _ = std::fs::create_dir_all(backup_dir);
     let prev = read_launchd_ollama_models().unwrap_or_else(|| "<unset>".to_string());
     let backup_path = backup_dir.join("ollama_models_backup.txt");
-    std::fs::write(&backup_path, format!("previous_OLLAMA_MODELS={prev}\n"))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        &backup_path,
+        format!("previous_OLLAMA_MODELS={prev}\ntarget_OLLAMA_MODELS={library_path}\n"),
+    )
+    .map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "macos")]
     {
@@ -201,5 +207,16 @@ mod tests {
             .as_deref(),
             Some("0.40.9")
         );
+    }
+
+    #[test]
+    fn configure_ollama_models_requires_confirmation_and_non_empty_path() {
+        let tmp = std::env::temp_dir().join("mosaic-test-ollama-cfg");
+        let err_unconfirmed = configure_ollama_models_dir("/Volumes/Drive/MOSAIC", &tmp, false)
+            .expect_err("unconfirmed must fail");
+        assert!(err_unconfirmed.contains("confirmation"));
+        let err_empty = configure_ollama_models_dir("   ", &tmp, true)
+            .expect_err("empty path must fail");
+        assert!(err_empty.contains("empty"));
     }
 }

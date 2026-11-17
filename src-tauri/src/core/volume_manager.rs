@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::security::{command_guard, path_guard, SecurityError};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::security::command_guard;
+use crate::security::{path_guard, SecurityError};
 
 #[derive(Debug, Error)]
 pub enum VolumeError {
