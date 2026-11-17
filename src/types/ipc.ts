@@ -102,3 +102,41 @@ export type NavRoute =
   | 'hardware'
   | 'storage'
   | 'settings';
+
+export type FitStatus = 'Recommended' | 'Borderline' | 'Not recommended' | 'Unknown';
+
+export interface CatalogModelEntry {
+  ollama_name: string;
+  display_name: string;
+  provider: string;
+  parameter_billions: number;
+  quantization: string;
+  download_size_bytes: number;
+  n_layers: number;
+  n_kv_heads: number;
+  head_dim: number;
+  default_context: number;
+  license_name: string;
+  license_url: string;
+  summary: string;
+}
+
+export interface ModelFitAssessment {
+  fit_status: FitStatus;
+  weight_memory_estimate: number | null;
+  runtime_overhead_estimate: number | null;
+  kv_cache_estimate: number | null;
+  total_estimated_bytes: number | null;
+  available_budget: number | null;
+  context_length: number;
+  expected_backend: string;
+  performance_estimate: string;
+  reasons: string[];
+  source: string;
+  confidence: string;
+}
+
+export interface CatalogModelWithFit {
+  model: CatalogModelEntry;
+  fit: ModelFitAssessment;
+}
