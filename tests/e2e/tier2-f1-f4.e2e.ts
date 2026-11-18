@@ -217,7 +217,7 @@ test.describe('Tier 2 — F3 My Models & /api/show Boundaries @tier2 @F3', () =>
       const orig = window.__TAURI_INTERNALS__?.invoke as (c: string, a: Record<string, unknown>) => Promise<unknown>;
       if (!window.__TAURI_INTERNALS__) return;
       window.__TAURI_INTERNALS__.invoke = (c: string, a: Record<string, unknown>) => {
-        if (c === 'run_model_benchmark') return new Promise((resolve) => setTimeout(() => resolve(orig(c, a)), 250));
+        if (c === 'run_model_benchmark') return new Promise((resolve) => setTimeout(() => resolve(orig(c, a)), 1000));
         return orig(c, a);
       };
     });
@@ -234,7 +234,7 @@ test.describe('Tier 2 — F3 My Models & /api/show Boundaries @tier2 @F3', () =>
     await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
     await navigateTo(page, 'My Models');
-    await expect(page.getByRole('heading', { name: 'hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS' })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(overflow).toBe(false);
     tracker.assertClean();

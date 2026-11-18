@@ -32,10 +32,19 @@ export async function auditOverflowAndButtons(page: Page, contextLabel: string):
   const report = await page.evaluate(() => {
     const docOverflow = document.documentElement.scrollWidth > window.innerWidth;
     const bodyOverflow = document.body.scrollWidth > window.innerWidth;
+    const dialogs = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="dialog"], .mosaic-modal')
+    ).filter((d) => {
+      const r = d.getBoundingClientRect();
+      const s = getComputedStyle(d);
+      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+    });
+    const scopeRoot: ParentNode = dialogs.length > 0 ? dialogs[dialogs.length - 1] : document;
+    const selector = dialogs.length > 0
+      ? 'button'
+      : 'main button, header button, [role="dialog"] button, .mosaic-modal button';
     const buttons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        'main button, header button, [role="dialog"] button, .mosaic-modal button'
-      )
+      scopeRoot.querySelectorAll<HTMLButtonElement>(selector)
     ).filter((btn) => {
       if (btn.classList.contains('mosaic-nav-btn')) return false;
       const r = btn.getBoundingClientRect();

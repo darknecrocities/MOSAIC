@@ -26,14 +26,15 @@ test.describe('Tier 4 — Real-World Workloads & Liquid Glassmorphism Visual Aud
     await expect(cardByModel(page, 'Qwen3 30B-A3B MoE (IQ2_XS)')).toBeVisible();
 
     await navigateTo(page, 'Run Model');
-    await page.getByLabel('Select installed model').selectOption('hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS');
+    await page.getByLabel('Select installed model').selectOption('hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS');
     await page.getByLabel('Context length').selectOption('8192');
     await page.getByLabel('Prompt input').fill('Summarize MoE quantization benefits');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Local inference ok.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
 
     await navigateTo(page, 'My Models');
-    await page.getByRole('button', { name: 'Benchmark hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS' }).click();
+    await page.getByRole('button', { name: 'Benchmark hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS' }).click();
     await page.getByRole('button', { name: /Analyze Bottlenecks/i }).first().click();
     await page.getByRole('button', { name: 'Export HTML' }).first().click();
     await navigateTo(page, 'External Storage');
@@ -87,12 +88,12 @@ test.describe('Tier 4 — Real-World Workloads & Liquid Glassmorphism Visual Aud
 
     await page.getByLabel(/GGUF/i).fill('models/bad.bin');
     await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
-    await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
-    await expect(page.getByText(/InvalidPath|gguf/i)).toBeVisible();
+    await page.getByRole('dialog').last().getByRole('button', { name: 'Launch Runtime' }).click();
+    await expect(page.locator('.mosaic-callout-error', { hasText: /InvalidPath|gguf/i })).toBeVisible();
 
     await page.getByLabel(/GGUF/i).fill('models/qwen3-235b.gguf');
     await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
-    await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
+    await page.getByRole('dialog').last().getByRole('button', { name: 'Launch Runtime' }).click();
     await page.getByRole('button', { name: /Stop Cluster Runtime/i }).click();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'stop_cluster_runtime')).toBe(true);
     tracker.assertClean();
@@ -109,7 +110,7 @@ test.describe('Tier 4 — Real-World Workloads & Liquid Glassmorphism Visual Aud
     await page.getByRole('button', { name: 'Configure OLLAMA_MODELS' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Apply Configuration' }).click();
     await page.getByRole('button', { name: /Start Managed Ollama/i }).click();
-    await page.getByRole('dialog').getByRole('button', { name: /Start|Confirm/i }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Start Managed Ollama' }).click();
     await expect(page.getByText('Ollama 0.40.9')).toBeVisible();
     await navigateTo(page, 'My Models');
     await page.getByRole('button', { name: 'Refresh Inventory' }).click();
@@ -117,7 +118,8 @@ test.describe('Tier 4 — Real-World Workloads & Liquid Glassmorphism Visual Aud
     await page.getByRole('button', { name: /Inspect|Show Metadata/i }).first().click();
     const showDialog = page.getByRole('dialog');
     await expect(showDialog).toBeVisible();
-    await expect(showDialog.getByText(/131072|Apache-2\.0/)).toBeVisible();
+    await expect(showDialog.getByText('131072')).toBeVisible();
+    await expect(showDialog.getByText('Apache-2.0')).toBeVisible();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'show_model_details')).toBe(true);
     await showDialog.getByRole('button', { name: /Close/i }).click();
     tracker.assertClean();

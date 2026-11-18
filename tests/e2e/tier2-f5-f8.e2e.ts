@@ -223,8 +223,8 @@ test.describe('Tier 2 — F7 Settings, Diagnostics & Cluster Security Boundaries
     for (const badPath of ['models/weights.bin', '../../etc/passwd.gguf', '/abs/path/a.gguf']) {
       await page.getByLabel(/GGUF/i).fill(badPath);
       await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
-      await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
-      await expect(page.getByText(/InvalidPath|gguf|traversal|\.\./i)).toBeVisible();
+      await page.getByRole('dialog').last().getByRole('button', { name: 'Launch Runtime' }).click();
+      await expect(page.locator('.mosaic-callout-error', { hasText: /InvalidPath|gguf|traversal|\.\./i })).toBeVisible();
     }
     expect(await page.evaluate(() => window.__MOSAIC_E2E__?.state.clusterRuntimeRunning)).toBe(false);
     tracker.assertClean();

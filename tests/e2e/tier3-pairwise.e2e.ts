@@ -16,16 +16,19 @@ test.describe('Tier 3 — Cross-Feature Pairwise Journeys @tier3', () => {
     const tracker = attachRuntimeErrorTracker(page);
     await installTauriMock(page, 'disconnected');
     await openApp(page);
-    await page.evaluate((vol) => window.__MOSAIC_E2E__?.setVolumes([vol]), ONE_TOUCH_VOLUME);
+    await page.evaluate((vol) => {
+      window.__MOSAIC_E2E__?.setVolumes([vol]);
+      window.__MOSAIC_E2E__?.setOllamaReachable(false);
+    }, ONE_TOUCH_VOLUME);
     await clickRescan(page);
     await page.getByRole('button', { name: /Use (as MOSAIC )?Library/i }).click();
     await navigateTo(page, 'External Storage');
     await page.getByRole('button', { name: 'Configure OLLAMA_MODELS' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Apply Configuration' }).click();
     await page.getByRole('button', { name: /Start Managed Ollama/i }).click();
-    await page.getByRole('dialog').getByRole('button', { name: /Start|Confirm/i }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Start Managed Ollama' }).click();
     await navigateTo(page, 'Hardware');
-    await expect(page.getByText(/Apple M3/)).toBeVisible();
+    await expect(page.getByText(/Apple M3/).first()).toBeVisible();
     await expect(page.getByText('Ollama 0.40.9')).toBeVisible();
     tracker.assertClean();
   });
@@ -64,7 +67,7 @@ test.describe('Tier 3 — Cross-Feature Pairwise Journeys @tier3', () => {
     await expect(page.getByRole('dialog').getByText(/q4_0/)).toBeVisible();
     await page.getByRole('button', { name: 'Close model details' }).click();
     await navigateTo(page, 'Run Model');
-    await page.getByLabel('Select installed model').selectOption('hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS');
+    await page.getByLabel('Select installed model').selectOption('hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS');
     await page.getByLabel('Prompt input').fill('Verify adaptive IQ2_XS');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Local inference ok.')).toBeVisible();
@@ -86,7 +89,7 @@ test.describe('Tier 3 — Cross-Feature Pairwise Journeys @tier3', () => {
     await expect(page.getByText('Pooled RPC Nodes')).toBeVisible();
     await page.getByLabel(/GGUF/i).fill('models/qwen3-235b.gguf');
     await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
-    await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
+    await page.getByRole('dialog').last().getByRole('button', { name: 'Launch Runtime' }).click();
     await page.getByRole('button', { name: /Stop Cluster Runtime/i }).click();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'stop_cluster_runtime')).toBe(true);
     tracker.assertClean();
@@ -121,7 +124,7 @@ test.describe('Tier 3 — Cross-Feature Pairwise Journeys @tier3', () => {
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
     await page.getByLabel('Prompt input').fill('Second completed prompt');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByText('Local inference ok.')).toBeVisible();
+    await expect(page.getByText('Local inference ok.').last()).toBeVisible();
     await page.getByRole('button', { name: 'Unload Model' }).click();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'unload_model')).toBe(true);
     tracker.assertClean();
@@ -158,7 +161,7 @@ test.describe('Tier 3 — Cross-Feature Pairwise Journeys @tier3', () => {
     await page.getByRole('button', { name: 'Configure OLLAMA_MODELS' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Apply Configuration' }).click();
     await page.getByRole('button', { name: /Start Managed Ollama/i }).click();
-    await page.getByRole('dialog').getByRole('button', { name: /Start|Confirm/i }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Start Managed Ollama' }).click();
     await navigateTo(page, 'Discover Models');
     await expect(cardByModel(page, 'Qwen 2.5 0.5B')).toBeVisible();
     tracker.assertClean();

@@ -30,7 +30,7 @@ test.describe('Tier 1 — F1 Onboarding & External Drive Gate @tier1 @F1', () =>
     await page.getByRole('button', { name: 'Inspect Hardware Profile' }).click();
     await expect(page.getByRole('heading', { name: 'Hardware & Memory Profile' })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Connect & Select Your External Model Library/i })).toBeHidden();
-    await expect(page.getByText(/Apple M3/)).toBeVisible();
+    await expect(page.getByText(/Apple M3/).first()).toBeVisible();
     tracker.assertClean();
   });
 
@@ -169,7 +169,7 @@ test.describe('Tier 1 — F3 My Models & /api/show Metadata @tier1 @F3', () => {
     await navigateTo(page, 'My Models');
     await expect(page.getByRole('heading', { name: 'llama3.2:3b' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'mistral:7b-instruct-q4_K_M' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS' })).toBeVisible();
     tracker.assertClean();
   });
 
@@ -181,7 +181,8 @@ test.describe('Tier 1 — F3 My Models & /api/show Metadata @tier1 @F3', () => {
     await page.getByRole('button', { name: /Inspect|Show Metadata/i }).first().click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(/131072|Apache-2\.0/)).toBeVisible();
+    await expect(dialog.getByText('131072')).toBeVisible();
+    await expect(dialog.getByText('Apache-2.0')).toBeVisible();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'show_model_details')).toBe(true);
     tracker.assertClean();
   });

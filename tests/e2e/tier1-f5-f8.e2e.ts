@@ -9,7 +9,7 @@ test.describe('Tier 1 — F5 Hardware & Python Insights @tier1 @F5', () => {
     await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
     await navigateTo(page, 'Hardware');
-    await expect(page.getByText(/Apple M3/)).toBeVisible();
+    await expect(page.getByText(/Apple M3/).first()).toBeVisible();
     await expect(page.getByText('10.0 GiB free of 16.0 GiB')).toBeVisible();
     await expect(page.getByText('Yes (CPU & GPU shared)')).toBeVisible();
     await expect(page.getByText(/Healthy \(protocol 1\.0\)/)).toBeVisible();
@@ -22,7 +22,7 @@ test.describe('Tier 1 — F5 Hardware & Python Insights @tier1 @F5', () => {
     await openApp(page);
     await navigateTo(page, 'Hardware');
     await expect(page.getByText('RTX 3050 Laptop')).toBeVisible();
-    await expect(page.getByText(/4\.0 GiB/)).toBeVisible();
+    await expect(page.getByText(/4\.0 GiB/).first()).toBeVisible();
     await expect(page.getByText('No', { exact: true })).toBeVisible();
     tracker.assertClean();
   });
@@ -102,7 +102,7 @@ test.describe('Tier 1 — F6 External Storage & Ollama Supervision @tier1 @F6', 
     await openApp(page);
     await navigateTo(page, 'External Storage');
     await page.getByRole('button', { name: /Start Managed Ollama/i }).click();
-    await page.getByRole('dialog').getByRole('button', { name: /Start|Confirm/i }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Start Managed Ollama' }).click();
     await expect(page.getByText('Ollama 0.40.9')).toBeVisible();
     tracker.assertClean();
   });
@@ -113,8 +113,8 @@ test.describe('Tier 1 — F6 External Storage & Ollama Supervision @tier1 @F6', 
     await openApp(page);
     await navigateTo(page, 'External Storage');
     await page.getByRole('button', { name: /Stop Managed Ollama/i }).click();
-    await page.getByRole('dialog').getByRole('button', { name: /Stop|Confirm/i }).click();
-    await expect(page.getByText('Ollama Stopped')).toBeVisible();
+    await page.getByRole('dialog').getByRole('button', { name: 'Stop Managed Ollama' }).click();
+    await expect(page.getByText('Ollama Stopped', { exact: true })).toBeVisible();
     await navigateTo(page, 'Run Model');
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
     tracker.assertClean();
@@ -219,7 +219,7 @@ test.describe('Tier 1 — F7 Settings, Diagnostics & Phase 7 Cluster Runtime @ti
     await page.getByRole('button', { name: 'Compute Adaptive / Cluster Plan' }).click();
     await page.getByLabel(/GGUF/i).fill('models/qwen3-30b-a3b-iq2_xs.gguf');
     await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
-    await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
+    await page.getByRole('dialog').last().getByRole('button', { name: 'Launch Runtime' }).click();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'launch_cluster_runtime')).toBe(true);
     tracker.assertClean();
   });
@@ -233,7 +233,7 @@ test.describe('Tier 1 — F7 Settings, Diagnostics & Phase 7 Cluster Runtime @ti
     await page.getByRole('button', { name: 'Compute Adaptive / Cluster Plan' }).click();
     await page.getByLabel(/GGUF/i).fill('models/qwen3-30b-a3b-iq2_xs.gguf');
     await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
-    await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
+    await page.getByRole('dialog').last().getByRole('button', { name: 'Launch Runtime' }).click();
     await page.getByRole('button', { name: /Stop Cluster Runtime/i }).click();
     await expect.poll(async () => (await getInvokeLog(page)).some((e) => e.cmd === 'stop_cluster_runtime')).toBe(true);
     tracker.assertClean();

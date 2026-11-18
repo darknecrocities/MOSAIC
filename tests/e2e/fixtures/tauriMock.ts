@@ -21,21 +21,15 @@ declare global {
     __MOSAIC_E2E__?: MosaicE2EControl;
   }
 }
-
 function initTauriRuntime(initialState: MutableFixtureState): void {
-  const GIB = 1024 ** 3;
-  const state: MutableFixtureState = structuredClone(initialState);
-  let nextId = 1;
-  let activeChatSeq = 0;
-  const callbacks = new Map<number, { fn: (data: unknown) => void; once: boolean }>();
-  const eventListeners = new Map<string, number[]>();
-  const invokeLog: MosaicE2EControl['invokeLog'] = [];
-  const emittedEvents: MosaicE2EControl['emittedEvents'] = [];
-
+  const GIB = 1024 ** 3, state: MutableFixtureState = structuredClone(initialState);
+  let nextId = 1, activeChatSeq = 0;
+  const callbacks = new Map<number, { fn: (data: unknown) => void; once: boolean }>(), eventListeners = new Map<string, number[]>();
+  const invokeLog: MosaicE2EControl['invokeLog'] = [], emittedEvents: MosaicE2EControl['emittedEvents'] = [];
   const MODEL_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}(:[a-zA-Z0-9._-]{1,64})?$/;
   const LOOPBACK_RE = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/.*)?$/;
   const FLAGS = new Set(['-ngl', '-c', '--ctx-size', '-ot', '--rpc', '-fa', '--flash-attn', '-ctk', '-ctv', '-t', '--threads', '-b', '--batch-size', '-ub', '--ubatch-size', '--mmap', '--mlock']);
-  const SETTINGS = new Set(['safety_reserve_gib', 'ollama_endpoint', 'telemetry_poll_ms', 'ollama_management_mode', 'execution_profile', 'kv_cache_type']);
+  const SETTINGS = new Set(['safety_reserve_gib', 'ollama_endpoint', 'telemetry_poll_ms', 'ollama_management_mode', 'default_context_length', 'execution_profile', 'kv_cache_type', 'max_loaded_models', 'num_thread', 'num_batch', 'num_ubatch', 'keep_alive', 'num_parallel']);
 
   const unregisterCallback = (id: number): void => { callbacks.delete(id); };
   const runCallback = (id: number, data: unknown): void => {
@@ -106,7 +100,7 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
           expected_backend: state.bootstrap.system.is_unified_memory ? 'Metal (Unified)' : 'CPU + Hybrid GPU', performance_estimate: 'Not benchmarked yet',
           reasons: [fitStatus === 'Not recommended' ? `Estimated ${(total / GIB).toFixed(1)} GiB exceeds budget ${(budget / GIB).toFixed(1)} GiB.` : `Fits under ${execProfile} (${kvType} KV, ${numGpu}/${entry.n_layers} GPU layers).`],
           source, confidence: state.bootstrap.analytics.available ? 'high' : 'medium',
-          execution_plan: { kv_cache_type: kvType, num_ctx: effCtx, num_gpu: numGpu, num_batch: execProfile === 'constrained_memory' ? 256 : 512, num_ubatch: 128, num_thread: Math.max(2, state.bootstrap.system.physical_cores ?? 4), use_mmap: true, use_mlock: false, keep_alive: '5m', flash_attention: true, offload_ratio: offloadRatio, warnings: fitStatus === 'Borderline' ? ['Memory pressure possible under long context.'] : [] },
+          execution_plan: { profile: execProfile, kv_cache_type: kvType, num_ctx: effCtx, num_gpu: numGpu, num_batch: execProfile === 'constrained_memory' ? 256 : 512, num_ubatch: 128, num_thread: Math.max(2, state.bootstrap.system.physical_cores ?? 4), use_mmap: true, use_mlock: false, keep_alive: '5m', flash_attention: true, num_parallel: state.bootstrap.settings.num_parallel, offload_ratio: offloadRatio, warnings: fitStatus === 'Borderline' ? ['Memory pressure possible under long context.'] : [] },
         },
       };
     });
@@ -128,18 +122,19 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
       }
       case 'update_setting':
       case 'set_setting': {
-        const key = String(args.key ?? '');
+        const key = String(args.key ?? ''), s = state.bootstrap.settings;
         if (!SETTINGS.has(key)) throw `setting key not allowed: ${key}`;
         if (key === 'ollama_endpoint') {
           const url = String(args.value ?? '');
           if (!LOOPBACK_RE.test(url)) throw `endpoint must be loopback (127.0.0.1 or localhost) by default: ${url}`;
-          state.bootstrap.settings.ollama_endpoint = url;
-        } else if (key === 'safety_reserve_gib') state.bootstrap.settings.safety_reserve_gib = Math.min(16, Math.max(0.5, Number(args.value)));
-        else if (key === 'telemetry_poll_ms') state.bootstrap.settings.telemetry_poll_ms = Number(args.value);
-        else if (key === 'ollama_management_mode') state.bootstrap.settings.ollama_management_mode = String(args.value);
-        else if (key === 'execution_profile') state.executionProfile = String(args.value) as MutableFixtureState['executionProfile'];
-        else if (key === 'kv_cache_type') state.kvCacheType = String(args.value) as MutableFixtureState['kvCacheType'];
-        return structuredClone(state.bootstrap.settings);
+          s.ollama_endpoint = url;
+        } else if (key === 'safety_reserve_gib') s.safety_reserve_gib = Math.min(16, Math.max(0.5, Number(args.value)));
+        else if (key === 'execution_profile') { s.execution_profile = String(args.value); state.executionProfile = s.execution_profile as MutableFixtureState['executionProfile']; }
+        else if (key === 'kv_cache_type') { s.kv_cache_type = String(args.value); if (s.kv_cache_type !== 'auto') state.kvCacheType = s.kv_cache_type as MutableFixtureState['kvCacheType']; }
+        else if (key === 'num_thread' || key === 'num_batch' || key === 'num_ubatch') s[key] = args.value == null ? null : Number(args.value);
+        else if (key === 'ollama_management_mode' || key === 'keep_alive') s[key] = String(args.value);
+        else if (key === 'telemetry_poll_ms' || key === 'default_context_length' || key === 'max_loaded_models' || key === 'num_parallel') s[key] = Number(args.value);
+        return structuredClone(s);
       }
       case 'get_diagnostics': return structuredClone(state.diagnostics.slice(0, Math.min(200, Math.max(1, Number(args.limit ?? 50)))));
       case 'list_catalog_with_fit':
@@ -173,8 +168,8 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
               delete state.activePulls[model];
               if (!state.installed.some((m) => m.name === model)) state.installed.push({ name: model, size_bytes: total, digest: 'sha256:e2e000112233', modified_at: new Date().toISOString(), family: 'qwen', parameter_size: '0.5B', quantization_level: 'Q4_K_M' });
               emitBackendEvent('mosaic://pull-progress', { model, status: 'success', completed: total, total, done: true, error: null });
-            }, 400);
-          }, 200);
+            }, 900);
+          }, 300);
         }, 50);
         return null;
       }
@@ -216,8 +211,8 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
             if (activeChatSeq !== seq || state.activeInferenceSession !== sid) return;
             if (state.streamHttpError) { const err = state.streamHttpError; state.activeInferenceSession = null; emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: err }); return; }
             emitBackendEvent('mosaic://chat-token', { session_id: sid, token: 'inference ok.', done: false, error: null });
-            window.setTimeout(() => { if (activeChatSeq === seq && state.activeInferenceSession === sid) { state.activeInferenceSession = null; emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: null }); } }, 400);
-          }, 200);
+            window.setTimeout(() => { if (activeChatSeq === seq && state.activeInferenceSession === sid) { state.activeInferenceSession = null; emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: null }); } }, 900);
+          }, 350);
         }, 50);
         return null;
       }

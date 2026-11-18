@@ -134,7 +134,7 @@ const CATALOG_PRESETS: CatalogModelEntry[] = [
   cat('llama3.2:1b', 'Llama 3.2 1B', 'Meta', 1.24, 'Q8_0', 1_320_000_000, 16, 8, 64, 4096, 'Llama 3.2 Community', 'https://ollama.com/library/llama3.2', 'Compact multilingual instruction model.'),
   cat('llama3.2:3b', 'Llama 3.2 3B', 'Meta', 3.21, 'Q4_K_M', 2_020_000_000, 28, 8, 128, 4096, 'Llama 3.2 Community', 'https://ollama.com/library/llama3.2', 'Balanced 3B instruction model.'),
   cat('mistral:7b-instruct-q4_K_M', 'Mistral 7B Instruct', 'Mistral AI', 7.25, 'Q4_K_M', 4_370_000_000, 32, 8, 128, 4096, 'Apache-2.0', 'https://ollama.com/library/mistral', 'Classic 7B instruction model with GQA.'),
-  cat('hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS', 'Qwen3 30B-A3B MoE (IQ2_XS)', 'Alibaba / Unsloth', 30.5, 'IQ2_XS', 9_650_000_000, 48, 4, 128, 8192, 'Apache-2.0', 'https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF', '30B sparse MoE (3.3B active) quantized to IQ2_XS for 16 GiB systems.', 3.3),
+  cat('hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS', 'Qwen3 30B-A3B MoE (IQ2_XS)', 'Alibaba / Bartowski', 30.5, 'IQ2_XS', 9_140_316_832, 48, 4, 128, 8192, 'Apache-2.0', 'https://huggingface.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF', '30B sparse MoE (3.3B active) quantized to IQ2_XS for 16 GiB systems.', 3.3),
   cat('hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ3_XXS', 'Qwen3 30B-A3B MoE (IQ3_XXS)', 'Alibaba / Unsloth', 30.5, 'IQ3_XXS', 12_100_000_000, 48, 4, 128, 8192, 'Apache-2.0', 'https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF', '30B sparse MoE in IQ3_XXS requiring constrained KV precision on 16 GiB hosts.', 3.3),
   cat('qwen3:30b-a3b', 'Qwen 3 30B-A3B MoE', 'Alibaba', 30.5, 'Q4_K_M', 18_500_000_000, 48, 4, 128, 8192, 'Apache-2.0', 'https://ollama.com/library/qwen3', 'Sparse 30B MoE (3.3B active) at Q4_K_M.', 3.3),
   cat('deepseek-r1:70b-llama-distill-q4_K_M', 'DeepSeek-R1 Distill 70B', 'DeepSeek', 70.6, 'Q4_K_M', 42_520_000_000, 80, 8, 128, 4096, 'MIT', 'https://ollama.com/library/deepseek-r1', 'Large 70B reasoning model suited for workstation or RPC pooling.'),
@@ -161,7 +161,11 @@ function makeOllama(reachable: boolean, envModels: string | null): OllamaStatus 
 
 const DEFAULT_SETTINGS: AppSettingsSnapshot = {
   safety_reserve_gib: 3.0, ollama_endpoint: 'http://127.0.0.1:11434',
-  telemetry_poll_ms: 5000, ollama_management_mode: 'supervised',
+  telemetry_poll_ms: 5000, ollama_management_mode: 'managed_or_detected',
+  default_context_length: 4096, execution_profile: 'auto_adaptive',
+  kv_cache_type: 'auto', max_loaded_models: 1,
+  num_thread: null, num_batch: null, num_ubatch: null,
+  keep_alive: '5m', num_parallel: 1,
 };
 
 const SEED_REPORT: BenchmarkReportRecord = {
@@ -194,7 +198,7 @@ export function createFixtureState(profile: FixtureProfileId): MutableFixtureSta
     installed = [
       mkModel('llama3.2:3b', 2_020_000_000, 'sha256:a1b2c3d4e5f6', 'llama', '3.2B', 'Q4_K_M'),
       mkModel('mistral:7b-instruct-q4_K_M', 4_370_000_000, 'sha256:f6e5d4c3b2a1', 'llama', '7.2B', 'Q4_K_M'),
-      mkModel('hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS', 9_650_000_000, 'sha256:998877665544', 'qwen3moe', '30.5B', 'IQ2_XS'),
+      mkModel('hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS', 9_140_316_832, 'sha256:998877665544', 'qwen3moe', '30.5B', 'IQ2_XS'),
     ];
     reports = [{ ...SEED_REPORT }];
   } else if (profile === 'connected-8gb-constrained') {
@@ -221,7 +225,7 @@ export function createFixtureState(profile: FixtureProfileId): MutableFixtureSta
     activeLib = toActiveLib(ONE_TOUCH_VOLUME, true);
     connected = true;
     ollama = makeOllama(true, activeLib.directory_path);
-    installed = [mkModel('hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS', 9_650_000_000, 'sha256:998877665544', 'qwen3moe', '30.5B', 'IQ2_XS')];
+    installed = [mkModel('hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS', 9_140_316_832, 'sha256:998877665544', 'qwen3moe', '30.5B', 'IQ2_XS')];
     workers = [
       { id: 'wrk-1', name: 'RTX-Node-A', host: '192.168.1.50', port: 50052, vram_bytes: 24 * GIB, ram_available_bytes: 32 * GIB, backend: 'ggml_rpc', status: 'reachable', rtt_ms: 2, created_at: NOW },
       { id: 'wrk-2', name: 'ROCm-Node-B', host: '192.168.1.51', port: 50052, vram_bytes: 16 * GIB, ram_available_bytes: 32 * GIB, backend: 'ggml_rpc', status: 'reachable', rtt_ms: 3, created_at: NOW },
