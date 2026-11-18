@@ -49,7 +49,11 @@ export function App() {
         />
       )}
       {rt.state && rt.route === 'overview' && (
-        <OverviewScreen state={rt.state} onNavigate={rt.setRoute} />
+        <OverviewScreen
+          state={rt.state}
+          installedCount={rt.installed.length}
+          onNavigate={rt.setRoute}
+        />
       )}
       {rt.route === 'discover' && (
         <DiscoverModelsScreen
@@ -107,19 +111,23 @@ export function App() {
           streaming={rt.streaming}
           messages={rt.messages}
           telemetry={rt.state?.telemetry}
+          executionProfile={rt.executionProfile}
+          kvCacheType={rt.kvCacheType}
           onSelectModel={rt.setSelectedModel}
-          onSendMessage={(prompt, numCtx, temperature) =>
+          onSendMessage={(prompt, numCtx, temperature, opts) =>
             void rt.handleSendMessage(prompt, {
               numCtx,
               temperature,
-              executionProfile: rt.executionProfile,
-              kvCacheType: rt.kvCacheType,
-              numGpu: null,
+              executionProfile: opts?.executionProfile ?? rt.executionProfile,
+              kvCacheType: opts?.kvCacheType ?? rt.kvCacheType,
+              numGpu: opts?.numGpu ?? null,
               keepAlive: rt.state?.settings.keep_alive ?? '5m',
             })
           }
           onStopGeneration={rt.handleStopGeneration}
           onUnloadModel={rt.handleUnloadModel}
+          onNewSession={rt.handleNewSession}
+          onStartManagedOllama={rt.handleStartManagedOllama}
         />
       )}
       {rt.route === 'hardware' &&
