@@ -10,6 +10,7 @@ from typing import Any
 
 import psutil
 
+from mosaic_analytics.numeric import safe_float, safe_int, safe_optional_float
 from mosaic_analytics.protocol import JobContext
 
 FIXED_PROMPT = "Explain in two concise sentences why local model memory depends on quantization."
@@ -54,11 +55,11 @@ def _summarize(values: list[float]) -> dict[str, float]:
 
 
 def _resolve_cold_timeout_s(params: dict[str, Any]) -> float:
-    explicit = params.get("cold_load_timeout_s")
-    if isinstance(explicit, int | float) and explicit > 0:
-        return max(30.0, float(explicit))
+    explicit = safe_optional_float(params.get("cold_load_timeout_s"))
+    if explicit is not None and explicit > 0:
+        return max(30.0, explicit)
 
-    size_bytes = float(params.get("model_size_bytes") or 0)
+    size_bytes = safe_float(params.get("model_size_bytes"), 0.0)
     if size_bytes <= 0:
         return 180.0
     media_kind = str(params.get("media_kind") or "unknown").upper()
@@ -89,11 +90,12 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     if not model:
         raise ValueError("model is required for benchmarking")
 
-    repetitions = max(2, min(10, int(params.get("repetitions") or 3)))
-    context_length = max(512, int(params.get("context_length") or 4096))
+    repetitions = max(2, min(10, safe_int(params.get("repetitions"), 3)))
+    context_length = max(512, safe_int(params.get("context_length"), 4096))
     prompt = str(params.get("prompt") or FIXED_PROMPT)
     cold_timeout_s = _resolve_cold_timeout_s(params)
-    warm_timeout_s = max(30.0, float(params.get("warm_load_timeout_s") or 120.0))
+    warm_raw = safe_optional_float(params.get("warm_load_timeout_s"))
+    warm_timeout_s = max(30.0, warm_raw if (warm_raw is not None and warm_raw > 0) else 120.0)
     options = _build_options(params, context_length)
     keep_alive = params.get("keep_alive")
 
@@ -135,10 +137,10 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
             body,
             timeout_s=cold_timeout_s if idx == 0 else warm_timeout_s,
         )
-        load_ms = float(res.get("load_duration", 0)) / 1e6
-        prompt_eval_ms = float(res.get("prompt_eval_duration", 0)) / 1e6
-        eval_ns = float(res.get("eval_duration", 0))
-        eval_count = int(res.get("eval_count", 0))
+        load_ms = safe_float(res.get("load_duration"), 0.0) / 1e6
+        prompt_eval_ms = safe_float(res.get("prompt_eval_duration"), 0.0) / 1e6
+        eval_ns = safe_float(res.get("eval_duration"), 0.0)
+        eval_count = safe_int(res.get("eval_count"), 0)
         tps = (eval_count / (eval_ns / 1e9)) if eval_ns > 0 and eval_count > 0 else 0.0
 
         if idx == 0:

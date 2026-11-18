@@ -165,3 +165,26 @@ def test_analyze_hardware_guards_malformed_system_profile() -> None:
         _ctx(),
     )["value"]
     assert res["ram_effective_avail_bytes"] >= 0
+
+
+def test_rocm_smi_rejects_infinity_and_nan_json(monkeypatch) -> None:
+    monkeypatch.setattr(
+        hardware_analyzer.shutil,
+        "which",
+        lambda name: "/usr/bin/rocm-smi" if name == "rocm-smi" else None,
+    )
+    payload = (
+        '{"card0": {"VRAM Total Memory (B)": Infinity, "VRAM Total Used Memory (B)": 0}, '
+        '"card1": {"VRAM Total Memory (B)": NaN, "VRAM Total Used Memory (B)": 0}, '
+        '"card2": {"Card Series": "RX 7800 XT", '
+        '"VRAM Total Memory (B)": 17179869184, "VRAM Total Used Memory (B)": 1073741824}}'
+    )
+    monkeypatch.setattr(
+        hardware_analyzer.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(returncode=0, stdout=payload),
+    )
+    gpus = hardware_analyzer._probe_rocm_smi()
+    assert len(gpus) == 1
+    assert gpus[0]["model"] == "RX 7800 XT"
+    assert gpus[0]["vram_total_bytes"] == 16 * 1024**3

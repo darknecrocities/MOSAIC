@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from mosaic_analytics.fit_inputs import is_pos_num
 from mosaic_analytics.model_fit_analyzer import GIB, assess_model_fit, assess_model_fit_batch
+from mosaic_analytics.numeric import safe_float, safe_int, safe_optional_float
 
 
 def test_stepped_down_plan_ctx_keeps_num_gpu_and_fit_consistent_16gb_14b(make_ctx) -> None:
@@ -184,3 +186,37 @@ def test_bool_float_vram_and_bad_string_inputs(make_ctx) -> None:
         make_ctx("float-vram"),
     )["value"]
     assert res_flt["expected_backend"] == "discrete_gpu"
+
+
+def test_numeric_overflow_huge_int_and_scalar_gpus(make_ctx) -> None:
+    huge = 10**400
+    assert safe_optional_float(huge) is None
+    assert safe_float(huge, 1.5) == 1.5
+    assert safe_int(huge, 7) == 7
+    assert is_pos_num(huge) is False
+
+    res = assess_model_fit(
+        {
+            "model": {"download_size_bytes": huge, "parameter_billions": huge},
+            "system_profile": {
+                "is_unified_memory": False,
+                "gpus": 123,
+                "gpu_vram_bytes": huge,
+                "ram_available_bytes": 16 * GIB,
+            },
+            "safety_reserve_gib": huge,
+            "context_length": huge,
+        },
+        make_ctx("huge-int"),
+    )["value"]
+    assert res["fit_status"] == "Unknown"
+
+    batch = assess_model_fit_batch(
+        {
+            "system_profile": {"gpus": "bad", "ram_available_bytes": 16 * GIB},
+            "models": [{"ollama_name": "qwen2.5:0.5b", "download_size_bytes": 400_000_000}],
+        },
+        make_ctx("scalar-gpus"),
+    )["value"]["assessments"][0]
+    assert batch["fit_status"] == "Recommended"
+    assert batch["expected_backend"] == "cpu_ram"

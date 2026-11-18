@@ -15,12 +15,12 @@ from mosaic_analytics.numeric import safe_float, safe_int
 
 def is_pos_num(val: Any) -> bool:
     """Return True when val is a finite positive int/float (excluding bool)."""
-    return (
-        isinstance(val, int | float)
-        and not isinstance(val, bool)
-        and math.isfinite(float(val))
-        and val > 0
-    )
+    if not isinstance(val, int | float) or isinstance(val, bool):
+        return False
+    try:
+        return math.isfinite(float(val)) and val > 0
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def normalize_hardware(params: dict[str, Any]) -> dict[str, Any]:
@@ -33,6 +33,8 @@ def normalize_hardware(params: dict[str, Any]) -> dict[str, Any]:
         return {}
     vram = raw_sp.get("gpu_vram_bytes")
     if vram is None and not raw_sp.get("is_unified_memory"):
+        raw_gpus = raw_sp.get("gpus")
+        gpus = raw_gpus if isinstance(raw_gpus, list) else []
         gpu_vrams = [
             safe_int(
                 g.get("vram_total_bytes")
@@ -40,7 +42,7 @@ def normalize_hardware(params: dict[str, Any]) -> dict[str, Any]:
                 else g.get("vram_bytes"),
                 0,
             )
-            for g in (raw_sp.get("gpus") or [])
+            for g in gpus
             if isinstance(g, dict)
         ]
         vram = max(gpu_vrams, default=0) or None

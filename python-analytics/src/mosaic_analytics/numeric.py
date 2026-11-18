@@ -11,7 +11,10 @@ def safe_optional_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int | float):
-        parsed = float(value)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
         return parsed if math.isfinite(parsed) else None
     if isinstance(value, str):
         stripped = value.strip()
@@ -19,7 +22,7 @@ def safe_optional_float(value: Any) -> float | None:
             return None
         try:
             parsed = float(stripped)
-        except ValueError:
+        except (TypeError, ValueError, OverflowError):
             return None
         return parsed if math.isfinite(parsed) else None
     return None

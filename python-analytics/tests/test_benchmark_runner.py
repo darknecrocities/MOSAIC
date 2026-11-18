@@ -156,3 +156,38 @@ def test_benchmark_adaptive_timeouts_and_cancellation(monkeypatch) -> None:
         JobContext(job_id="bench-cancel", cancel_event=cancel_ev),
     )
     assert cancelled["value"]["cancelled"] is True
+
+
+def test_benchmark_handles_null_json_fields_and_bool_inf_timeouts(monkeypatch) -> None:
+    seen_timeouts: list[float] = []
+
+    def fake_post(_url: str, payload: dict[str, Any], timeout_s: float = 60.0) -> dict[str, Any]:
+        if payload.get("keep_alive") == 0:
+            return {"done": True}
+        seen_timeouts.append(timeout_s)
+        return {
+            "done": True,
+            "load_duration": None,
+            "prompt_eval_duration": None,
+            "eval_duration": None,
+            "eval_count": None,
+        }
+
+    monkeypatch.setattr(benchmark_runner, "_post_json", fake_post)
+    for bad_timeout in (True, False, float("inf"), float("nan"), 10**400):
+        res = benchmark_runner.run_benchmark(
+            {
+                "endpoint": "http://127.0.0.1:11434",
+                "model": "qwen3:30b-a3b",
+                "repetitions": 2,
+                "cold_load_timeout_s": bad_timeout,
+                "warm_load_timeout_s": bad_timeout,
+            },
+            JobContext(job_id="bench-null", cancel_event=threading.Event()),
+        )
+        val = res["value"]
+        assert val["cold_load_ms"] == 0.0
+        assert val["ttft_ms"]["median"] == 0.0
+        assert val["generation_tok_per_sec"]["median"] == 0.0
+        assert val["cold_load_timeout_s"] == 180.0
+    assert all(t in {180.0, 120.0} for t in seen_timeouts)

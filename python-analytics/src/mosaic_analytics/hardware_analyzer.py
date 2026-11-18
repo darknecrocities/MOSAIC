@@ -142,9 +142,15 @@ def _probe_rocm_smi() -> list[dict[str, Any]]:
         if not isinstance(info, dict):
             continue
         try:
-            total_b = int(info.get("VRAM Total Memory (B)") or 0)
-            used_b = int(info.get("VRAM Total Used Memory (B)") or 0)
-        except (TypeError, ValueError):
+            raw_total = info.get("VRAM Total Memory (B)") or 0
+            raw_used = info.get("VRAM Total Used Memory (B)") or 0
+            if (isinstance(raw_total, float) and not math.isfinite(raw_total)) or (
+                isinstance(raw_used, float) and not math.isfinite(raw_used)
+            ):
+                continue
+            total_b = int(raw_total)
+            used_b = int(raw_used)
+        except (TypeError, ValueError, OverflowError):
             continue
         if total_b <= 0:
             continue

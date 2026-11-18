@@ -8,7 +8,7 @@ from typing import Any
 
 import psutil
 
-from mosaic_analytics.numeric import safe_int
+from mosaic_analytics.numeric import safe_float, safe_int, safe_optional_float
 
 GIB = 1024**3
 EXECUTION_PROFILES = ("auto_adaptive", "max_quality", "balanced", "constrained_memory")
@@ -52,7 +52,7 @@ def resolve_memory_budget(
     hardware: dict[str, Any], reserve_gib: float = 2.0
 ) -> HardwareMemoryBudget:
     """Compute GPU/Metal wired budget, CPU spill budget, and physical thread count."""
-    reserve_bytes = int(max(0.0, reserve_gib) * GIB)
+    reserve_bytes = int(max(0.0, safe_float(reserve_gib, 2.0)) * GIB)
     is_unified = bool(hardware.get("is_unified_memory"))
     vram_raw = hardware.get("gpu_vram_bytes")
     ram_total = max(0, safe_int(hardware.get("ram_total_bytes"), 0))
@@ -77,12 +77,8 @@ def resolve_memory_budget(
             metal_cap, gpu_budget, cpu_spill, gpu_budget, physical_cores,
         )
 
-    if (
-        isinstance(vram_raw, int | float)
-        and not isinstance(vram_raw, bool)
-        and math.isfinite(float(vram_raw))
-        and vram_raw > 0
-    ):
+    vram_val = safe_optional_float(vram_raw) if isinstance(vram_raw, int | float) else None
+    if vram_val is not None and vram_val > 0:
         gpu_budget = max(0, int(vram_raw) - int(0.5 * GIB))
         cpu_spill = max(0, ram_effective - reserve_bytes)
         return HardwareMemoryBudget(

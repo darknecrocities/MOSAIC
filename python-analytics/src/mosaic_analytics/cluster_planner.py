@@ -132,7 +132,7 @@ def plan_cluster(params: dict[str, Any], _ctx: JobContext) -> dict[str, Any]:
             tier2_ram = min(max(0, total_demand - tier1_gpu), effective_ram_pool)
         tier3_mmap = max(0, total_demand - tier1_gpu - tier2_ram)
     else:
-        gpu_target = total_demand if not is_moe else hot_bytes
+        gpu_target = hot_bytes if should_offload_exps_cpu else total_demand
         tier1_gpu = min(gpu_target, local_fast_tier)
         remaining_after_gpu = max(0, total_demand - tier1_gpu)
         tier2_ram = min(remaining_after_gpu, local_ram_tier)
@@ -154,7 +154,7 @@ def plan_cluster(params: dict[str, Any], _ctx: JobContext) -> dict[str, Any]:
             f"{tier3_mmap / GIB:.1f} GiB exceeds local RAM/VRAM and must stream via "
             "external drive mmap."
         )
-        if media_kind in {"HDD", "UNKNOWN"}:
+        if media_kind == "HDD":
             warnings.append(
                 "External USB HDD / ExFAT mmap paging is slow for 70B-200B+ models; "
                 "use an NVMe SSD or pool additional machines via GGML_RPC."

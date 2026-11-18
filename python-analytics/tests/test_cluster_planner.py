@@ -223,3 +223,27 @@ def test_zero_valid_and_malformed_workers_fall_back_to_single_node(qwen3_30b_q4)
     )["value"]
     assert val["strategy"] != "multi_node_rpc"
     assert len(val["runtime_flags"]) > 0
+
+
+def test_discrete_24gb_vram_16gb_ram_30b_moe_fits_fully_in_vram(qwen3_30b_q4) -> None:
+    val = plan_cluster(
+        {
+            "model": qwen3_30b_q4,
+            "local_node": {
+                "name": "Win-24GB",
+                "is_unified_memory": False,
+                "vram_bytes": 24 * GIB,
+                "ram_available_bytes": 16 * GIB,
+                "ram_total_bytes": 16 * GIB,
+            },
+            "context_length": 4096,
+            "safety_reserve_gib": 2.0,
+        },
+        _ctx(),
+    )["value"]
+    assert val["strategy"] == "single_node_full_fit"
+    assert val["feasible"] is True
+    assert val["tier1_gpu_bytes"] == val["total_demand_bytes"]
+    assert val["tier2_ram_bytes"] == 0
+    assert val["tier3_disk_mmap_bytes"] == 0
+    assert val["runtime_flags"] == ["-ngl", "999"]
