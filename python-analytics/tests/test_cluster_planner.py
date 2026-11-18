@@ -88,3 +88,69 @@ def test_70b_dense_pools_memory_across_three_rpc_nodes() -> None:
     assert len(val["node_allocations"]) == 3
     assert "--rpc" in val["runtime_flags"]
     assert "192.168.1.50:50052,192.168.1.51:50052" in val["runtime_flags"]
+
+
+def test_unified_memory_30b_moe_within_metal_cap_omits_exps_cpu(qwen3_30b_iq2) -> None:
+    res = plan_cluster(
+        {
+            "model": qwen3_30b_iq2,
+            "local_node": {
+                "name": "Apple M3",
+                "is_unified_memory": True,
+                "ram_total_bytes": 16 * GIB,
+                "ram_available_bytes": 13 * GIB,
+                "metal_wired_limit_bytes": int(11.5 * GIB),
+            },
+            "context_length": 4096,
+            "safety_reserve_gib": 1.5,
+            "kv_cache_type": "q8_0",
+        },
+        _ctx(),
+    )
+    val = res["value"]
+    assert val["strategy"] == "single_node_full_fit"
+    assert val["feasible"] is True
+    assert "exps=CPU" not in val["runtime_flags"]
+    assert "-ngl" in val["runtime_flags"]
+
+
+def test_unified_memory_moe_exceeding_metal_cap_emits_exps_cpu(qwen3_30b_iq3) -> None:
+    res = plan_cluster(
+        {
+            "model": qwen3_30b_iq3,
+            "local_node": {
+                "name": "Apple M3",
+                "is_unified_memory": True,
+                "ram_total_bytes": 16 * GIB,
+                "ram_available_bytes": 13 * GIB,
+                "metal_wired_limit_bytes": 10 * GIB,
+            },
+            "context_length": 4096,
+            "safety_reserve_gib": 2.0,
+        },
+        _ctx(),
+    )
+    val = res["value"]
+    assert val["strategy"] == "single_node_moe_offload"
+    assert "exps=CPU" in val["runtime_flags"]
+
+
+def test_discrete_gpu_moe_exceeding_vram_emits_exps_cpu(qwen3_30b_q4) -> None:
+    res = plan_cluster(
+        {
+            "model": qwen3_30b_q4,
+            "local_node": {
+                "name": "Win-8GB",
+                "is_unified_memory": False,
+                "vram_bytes": 8 * GIB,
+                "ram_available_bytes": 32 * GIB,
+            },
+            "context_length": 4096,
+            "safety_reserve_gib": 2.0,
+        },
+        _ctx(),
+    )
+    val = res["value"]
+    assert val["strategy"] == "single_node_moe_offload"
+    assert val["feasible"] is True
+    assert "exps=CPU" in val["runtime_flags"]
