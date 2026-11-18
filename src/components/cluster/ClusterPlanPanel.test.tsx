@@ -1,31 +1,48 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { SAMPLE_CLUSTER_PLAN } from '../../test-utils/mockFixtures';
+import { installTauriTestBridge, type TauriTestController } from '../../test-utils/mockTauri';
 import { ClusterPlanPanel } from './ClusterPlanPanel';
 
 describe('ClusterPlanPanel', () => {
-  it('renders 3-tier memory breakdown and MoE/RPC flags', () => {
-    render(
-      <ClusterPlanPanel
-        plan={{
-          strategy: 'multi_node_rpc',
-          feasible: true,
-          is_moe: true,
-          total_demand_bytes: 80 * 1024 ** 3,
-          tier1_gpu_bytes: 12 * 1024 ** 3,
-          tier2_ram_bytes: 68 * 1024 ** 3,
-          tier3_disk_mmap_bytes: 0,
-          node_allocations: [
-            { name: 'Apple M3', role: 'coordinator', endpoint: '127.0.0.1', allocated_bytes: 12 * 1024 ** 3, budget_bytes: 12 * 1024 ** 3 },
-            { name: 'RTX-Node', role: 'rpc_worker', endpoint: '192.168.1.50:50052', allocated_bytes: 68 * 1024 ** 3, budget_bytes: 68 * 1024 ** 3 },
-          ],
-          runtime_flags: ['--split-mode', 'layer', '--rpc', '192.168.1.50:50052', '-ot', 'exps=CPU'],
-          warnings: ['Cross-node GGML_RPC pools memory over TCP; token speed is bounded by network RTT.'],
-        }}
-      />
-    );
+  let tauri: TauriTestController;
+
+  beforeEach(() => {
+    tauri = installTauriTestBridge();
+  });
+
+  afterEach(() => {
+    tauri.uninstall();
+  });
+
+  it('renders 3-tier memory breakdown, MoE/RPC flags, and gates Phase 7 cluster launch/stop', async () => {
+    render(<ClusterPlanPanel plan={SAMPLE_CLUSTER_PLAN} />);
 
     expect(screen.getByText('multi_node_rpc')).toBeInTheDocument();
     expect(screen.getByText('Pooled RPC Nodes')).toBeInTheDocument();
     expect(screen.getByText(/exps=CPU/)).toBeInTheDocument();
+
+    const launchBtn = screen.getByRole('button', { name: /Launch Cluster Runtime/i });
+    expect(launchBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/GGUF relative path/i), {
+      target: { value: 'models/qwen3-30b.gguf' },
+    });
+    expect(launchBtn).toBeEnabled();
+
+    fireEvent.click(launchBtn);
+    fireEvent.click(screen.getByRole('button', { name: 'Launch Runtime' }));
+    await waitFor(() => {
+      expect(tauri.callsFor('launch_cluster_runtime')[0]?.args).toEqual({
+        ggufRelPath: 'models/qwen3-30b.gguf',
+        runtimeFlags: SAMPLE_CLUSTER_PLAN.runtime_flags,
+        confirmed: true,
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Stop Cluster Runtime/i }));
+    await waitFor(() => {
+      expect(tauri.callsFor('stop_cluster_runtime')).toHaveLength(1);
+    });
   });
 });
