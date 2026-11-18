@@ -3,8 +3,7 @@ use tauri::State;
 
 use crate::commands::AppState;
 use crate::core::cluster_manager::{self, ClusterPlan, ClusterRuntimeRegistry, ClusterWorker};
-use crate::core::model_catalog;
-use crate::core::system_probe;
+use crate::core::{model_catalog, system_probe, telemetry};
 
 #[derive(Debug, Deserialize)]
 pub struct AddWorkerRequest {
@@ -61,7 +60,7 @@ pub async fn plan_adaptive_execution(
     context_length: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<ClusterPlan, String> {
-    let catalog = model_catalog::load_curated_catalog();
+    let catalog = model_catalog::load_effective_catalog(Some(&state.store));
     let model = catalog
         .into_iter()
         .find(|m| m.ollama_name == ollama_name)
@@ -77,7 +76,7 @@ pub async fn plan_adaptive_execution(
         &model,
         &system,
         &workers,
-        context_length.unwrap_or(4096),
+        context_length.unwrap_or(settings.default_context_length),
         settings.safety_reserve_gib,
         media_kind,
     )
@@ -97,15 +96,31 @@ pub fn launch_cluster_runtime(
         .get_active_library()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "External model library required before launching cluster runtime.".to_string())?;
-    cluster_rt.launch_llama_server(
+    match cluster_rt.launch_llama_server(
         std::path::Path::new(&active_library.directory_path),
         &gguf_rel_path,
         &runtime_flags,
         confirmed,
-    )
+    ) {
+        Ok(msg) => {
+            let _ = telemetry::log_diagnostic(&state.store, "info", "cluster_manager", &msg);
+            Ok(msg)
+        }
+        Err(err) => {
+            let _ = telemetry::log_diagnostic(&state.store, "error", "cluster_manager", &format!("Cluster launch failed: {err}"));
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
-pub fn stop_cluster_runtime(cluster_rt: State<'_, ClusterRuntimeRegistry>) -> bool {
-    cluster_rt.stop()
+pub fn stop_cluster_runtime(
+    state: State<'_, AppState>,
+    cluster_rt: State<'_, ClusterRuntimeRegistry>,
+) -> bool {
+    let stopped = cluster_rt.stop();
+    if stopped {
+        let _ = telemetry::log_diagnostic(&state.store, "info", "cluster_manager", "Stopped experimental llama-server");
+    }
+    stopped
 }

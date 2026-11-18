@@ -3,11 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
-use tokio::task::AbortHandle;
+use tokio::sync::watch;
 
-use crate::core::ollama_manager;
+use crate::commands::AppState;
+use crate::core::{ollama_manager, telemetry};
 use crate::core::settings_store::ActiveLibraryRecord;
 use crate::security::command_guard;
 
@@ -15,6 +16,8 @@ use crate::security::command_guard;
 pub enum DownloadError {
     #[error("external model library is not connected or configured")]
     ExternalDriveRequired,
+    #[error("pull already in progress for model: {0}")]
+    AlreadyInProgress(String),
     #[error("insufficient free space on external drive: required {required} bytes, available {available} bytes")]
     InsufficientSpace { required: u64, available: u64 },
     #[error("security validation failed: {0}")]
@@ -27,7 +30,7 @@ pub enum DownloadError {
     RemoteError(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PullProgressEvent {
     pub model: String,
     pub status: String,
@@ -37,20 +40,36 @@ pub struct PullProgressEvent {
     pub error: Option<String>,
 }
 
+struct ActiveDownload {
+    run_id: u64,
+    cancel_tx: watch::Sender<bool>,
+}
+
+#[derive(Default)]
+struct DownloadState {
+    next_id: u64,
+    entries: HashMap<String, ActiveDownload>,
+}
+
 #[derive(Default)]
 pub struct DownloadRegistry {
-    active: Arc<Mutex<HashMap<String, AbortHandle>>>,
+    active: Arc<Mutex<DownloadState>>,
+}
+
+pub enum PullOutcome {
+    Completed { emitted_done: bool },
+    Cancelled,
 }
 
 impl DownloadRegistry {
     pub fn has_active(&self) -> bool {
-        self.active.lock().map(|m| !m.is_empty()).unwrap_or(false)
+        self.active.lock().map(|s| !s.entries.is_empty()).unwrap_or(false)
     }
 
     pub fn cancel(&self, model: &str) -> bool {
-        if let Ok(mut map) = self.active.lock() {
-            if let Some(handle) = map.remove(model) {
-                handle.abort();
+        if let Ok(mut state) = self.active.lock() {
+            if let Some(entry) = state.entries.remove(model) {
+                let _ = entry.cancel_tx.send(true);
                 return true;
             }
         }
@@ -66,6 +85,51 @@ impl DownloadRegistry {
         active_library: Option<ActiveLibraryRecord>,
         library_connected: bool,
     ) -> Result<(), DownloadError> {
+        let app_for_emit = app.clone();
+        let app_for_log = app;
+        self.start_pull_with_sink(
+            endpoint,
+            model,
+            estimated_bytes,
+            active_library,
+            library_connected,
+            move |ev| {
+                if ev.status == "cancelled" {
+                    if let Some(st) = app_for_log.try_state::<AppState>() {
+                        let _ = telemetry::log_diagnostic(
+                            &st.store,
+                            "info",
+                            "download_manager",
+                            &format!("Cancelled pull for {}", ev.model),
+                        );
+                    }
+                } else if ev.status == "error" {
+                    if let Some(st) = app_for_log.try_state::<AppState>() {
+                        let _ = telemetry::log_diagnostic(
+                            &st.store,
+                            "error",
+                            "download_manager",
+                            &format!("Pull failed for {}: {}", ev.model, ev.error.as_deref().unwrap_or("unknown")),
+                        );
+                    }
+                }
+                let _ = app_for_emit.emit("mosaic://pull-progress", ev);
+            },
+        )
+    }
+
+    pub fn start_pull_with_sink<F>(
+        &self,
+        endpoint: String,
+        model: String,
+        estimated_bytes: Option<u64>,
+        active_library: Option<ActiveLibraryRecord>,
+        library_connected: bool,
+        mut emit: F,
+    ) -> Result<(), DownloadError>
+    where
+        F: FnMut(PullProgressEvent) + Send + 'static,
+    {
         command_guard::validate_model_name(&model)?;
         if !library_connected {
             return Err(DownloadError::ExternalDriveRequired);
@@ -80,62 +144,107 @@ impl DownloadRegistry {
                 });
             }
         }
-
         let base_url = ollama_manager::validate_loopback_endpoint(&endpoint)?;
-        let registry = self.active.clone();
-        let model_key = model.clone();
 
-        let task = tokio::spawn(async move {
-            let res = stream_pull(&app, base_url.as_str(), &model).await;
-            if let Err(err) = res {
-                let _ = app.emit(
-                    "mosaic://pull-progress",
-                    PullProgressEvent {
+        let (run_id, mut cancel_rx) = {
+            let mut state = self
+                .active
+                .lock()
+                .map_err(|_| DownloadError::RemoteError("download registry lock poisoned".into()))?;
+            if state.entries.contains_key(&model) {
+                return Err(DownloadError::AlreadyInProgress(model));
+            }
+            state.next_id += 1;
+            let run_id = state.next_id;
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            state.entries.insert(model.clone(), ActiveDownload { run_id, cancel_tx });
+            (run_id, cancel_rx)
+        };
+
+        let registry = self.active.clone();
+        tokio::spawn(async move {
+            match stream_pull(base_url.as_str(), &model, &mut cancel_rx, &mut emit).await {
+                Ok(PullOutcome::Cancelled) => {
+                    emit(PullProgressEvent {
+                        model: model.clone(),
+                        status: "cancelled".into(),
+                        completed: None,
+                        total: None,
+                        done: true,
+                        error: Some("Pull cancelled by user.".into()),
+                    });
+                }
+                Ok(PullOutcome::Completed { emitted_done }) => {
+                    if !emitted_done {
+                        emit(PullProgressEvent {
+                            model: model.clone(),
+                            status: "success".into(),
+                            completed: None,
+                            total: None,
+                            done: true,
+                            error: None,
+                        });
+                    }
+                }
+                Err(err) => {
+                    emit(PullProgressEvent {
                         model: model.clone(),
                         status: "error".into(),
                         completed: None,
                         total: None,
                         done: true,
                         error: Some(err.to_string()),
-                    },
-                );
+                    });
+                }
             }
-            if let Ok(mut map) = registry.lock() {
-                map.remove(&model);
+            if let Ok(mut state) = registry.lock() {
+                if state.entries.get(&model).is_some_and(|e| e.run_id == run_id) {
+                    state.entries.remove(&model);
+                }
             }
         });
-
-        if let Ok(mut map) = self.active.lock() {
-            map.insert(model_key, task.abort_handle());
-        }
         Ok(())
     }
 }
 
-async fn stream_pull(
-    app: &AppHandle,
+async fn wait_cancelled(rx: &mut watch::Receiver<bool>) {
+    let _ = rx.wait_for(|v| *v).await;
+}
+
+async fn stream_pull<F>(
     base_url: &str,
     model: &str,
-) -> Result<(), DownloadError> {
+    cancel_rx: &mut watch::Receiver<bool>,
+    emit: &mut F,
+) -> Result<PullOutcome, DownloadError>
+where
+    F: FnMut(PullProgressEvent),
+{
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .build()?;
     let url = format!("{}/api/pull", base_url.trim_end_matches('/'));
-    let mut resp = client
-        .post(&url)
-        .json(&serde_json::json!({ "model": model, "stream": true }))
-        .send()
-        .await?;
+    let mut resp = tokio::select! {
+        biased;
+        _ = wait_cancelled(cancel_rx) => return Ok(PullOutcome::Cancelled),
+        res = client.post(&url).json(&serde_json::json!({ "model": model, "stream": true })).send() => res?,
+    };
 
     if !resp.status().is_success() {
-        return Err(DownloadError::RemoteError(format!(
-            "HTTP {}",
-            resp.status()
-        )));
+        return Err(DownloadError::RemoteError(format!("HTTP {}", resp.status())));
     }
 
     let mut buffer = String::new();
-    while let Some(chunk) = resp.chunk().await? {
+    let mut emitted_done = false;
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = wait_cancelled(cancel_rx) => return Ok(PullOutcome::Cancelled),
+            res = resp.chunk() => res?,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(idx) = buffer.find('\n') {
             let line = buffer[..idx].trim().to_string();
@@ -147,27 +256,23 @@ async fn stream_pull(
                 if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
                     return Err(DownloadError::RemoteError(err.to_string()));
                 }
-                let status = val
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("downloading")
-                    .to_string();
+                let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string();
                 let done = status == "success";
-                let _ = app.emit(
-                    "mosaic://pull-progress",
-                    PullProgressEvent {
-                        model: model.to_string(),
-                        status,
-                        completed: val.get("completed").and_then(|v| v.as_u64()),
-                        total: val.get("total").and_then(|v| v.as_u64()),
-                        done,
-                        error: None,
-                    },
-                );
+                if done {
+                    emitted_done = true;
+                }
+                emit(PullProgressEvent {
+                    model: model.to_string(),
+                    status,
+                    completed: val.get("completed").and_then(|v| v.as_u64()),
+                    total: val.get("total").and_then(|v| v.as_u64()),
+                    done,
+                    error: None,
+                });
             }
         }
     }
-    Ok(())
+    Ok(PullOutcome::Completed { emitted_done })
 }
 
 #[cfg(test)]
