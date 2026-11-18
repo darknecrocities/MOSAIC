@@ -39,7 +39,7 @@ pub fn validate_loopback_endpoint(endpoint: &str) -> Result<reqwest::Url, Ollama
     let url = reqwest::Url::parse(endpoint)
         .map_err(|_| OllamaError::NonLoopbackEndpoint(endpoint.to_string()))?;
     let host = url.host_str().unwrap_or("");
-    let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
+    let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]";
     if url.scheme() == "http" && is_loopback {
         Ok(url)
     } else {
@@ -189,6 +189,7 @@ mod tests {
     fn enforces_loopback_endpoints() {
         assert!(validate_loopback_endpoint("http://127.0.0.1:11434").is_ok());
         assert!(validate_loopback_endpoint("http://localhost:11434").is_ok());
+        assert!(validate_loopback_endpoint("http://[::1]:11434").is_ok());
         assert!(validate_loopback_endpoint("http://0.0.0.0:11434").is_err());
         assert!(validate_loopback_endpoint("http://192.168.1.50:11434").is_err());
         assert!(validate_loopback_endpoint("http://169.254.169.254/latest").is_err());
