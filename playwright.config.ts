@@ -19,7 +19,7 @@ export default defineConfig({
   },
   reporter: [
     ['list'],
-    ['json', { outputFile: '/tmp/mosaic-playwright-results.json' }],
+    ['json', { outputFile: process.env.PLAYWRIGHT_JSON_OUTPUT_NAME || '/tmp/mosaic-playwright-results.json' }],
   ],
   use: {
     baseURL: BASE_URL,

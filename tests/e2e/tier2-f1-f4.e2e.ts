@@ -65,7 +65,7 @@ test.describe('Tier 2 — F1 Onboarding & Drive Gate Boundaries @tier2 @F1', () 
     await clickRescan(page);
     await expect(page.getByText(/ExFAT external drive detected/i)).toBeVisible();
     await page.getByRole('button', { name: /Use (as MOSAIC )?Library/i }).click();
-    await expect(page.getByRole('heading', { name: 'External Model Library' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'External Model Library', exact: true })).toBeVisible();
     tracker.assertClean();
   });
 

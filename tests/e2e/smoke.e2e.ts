@@ -23,7 +23,7 @@ test.describe('MOSAIC Baseline Smoke Suite @smoke', () => {
     await expect(buttons.nth(1)).toBeEnabled();
     await buttons.nth(1).click();
 
-    await expect(page.getByRole('heading', { name: 'External Model Library' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'External Model Library', exact: true })).toBeVisible();
     await expect(page.getByText('Connected', { exact: true })).toBeVisible();
     tracker.assertClean();
   });

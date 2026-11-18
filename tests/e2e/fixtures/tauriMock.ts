@@ -7,6 +7,7 @@ export interface MosaicE2EControl {
   emittedEvents: Array<{ event: string; payload: unknown; ts: number }>;
   state: MutableFixtureState;
   emitBackendEvent: (event: string, payload: unknown) => void;
+  hasEventListener: (event: string) => boolean;
   setVolumes: (volumes: MutableFixtureState['bootstrap']['external_volumes']) => void;
   setFreeBytes: (volumeId: string, freeBytes: number) => void;
   setOllamaReachable: (reachable: boolean, version?: string | null) => void;
@@ -25,6 +26,7 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
   const GIB = 1024 ** 3;
   const state: MutableFixtureState = structuredClone(initialState);
   let nextId = 1;
+  let activeChatSeq = 0;
   const callbacks = new Map<number, { fn: (data: unknown) => void; once: boolean }>();
   const eventListeners = new Map<string, number[]>();
   const invokeLog: MosaicE2EControl['invokeLog'] = [];
@@ -155,21 +157,25 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
         const total = typeof est === 'number' ? est : 1_000_000_000;
         const reqBytes = Math.floor(total * 1.1);
         if (est != null && state.bootstrap.active_library.free_bytes < reqBytes) throw `insufficient free space on external drive: required ${reqBytes} bytes, available ${state.bootstrap.active_library.free_bytes} bytes`;
-        state.activePulls[model] = { completed: 0, total, cancelled: false };
+        const pullEntry = { completed: 0, total, cancelled: false };
+        state.activePulls[model] = pullEntry;
         emitBackendEvent('mosaic://pull-progress', { model, status: 'pulling manifest', completed: 0, total, done: false, error: null });
         window.setTimeout(() => {
-          const cur = state.activePulls[model];
-          if (!cur || cur.cancelled) return;
-          cur.completed = Math.floor(total * 0.5);
-          emitBackendEvent('mosaic://pull-progress', { model, status: 'downloading', completed: cur.completed, total, done: false, error: null });
+          if (pullEntry.cancelled || state.activePulls[model] !== pullEntry) return;
+          pullEntry.completed = Math.floor(total * 0.25);
+          emitBackendEvent('mosaic://pull-progress', { model, status: 'downloading', completed: pullEntry.completed, total, done: false, error: null });
           window.setTimeout(() => {
-            const fin = state.activePulls[model];
-            if (!fin || fin.cancelled) return;
-            delete state.activePulls[model];
-            if (!state.installed.some((m) => m.name === model)) state.installed.push({ name: model, size_bytes: total, digest: 'sha256:e2e000112233', modified_at: new Date().toISOString(), family: 'qwen', parameter_size: '0.5B', quantization_level: 'Q4_K_M' });
-            emitBackendEvent('mosaic://pull-progress', { model, status: 'success', completed: total, total, done: true, error: null });
-          }, 90);
-        }, 60);
+            if (pullEntry.cancelled || state.activePulls[model] !== pullEntry) return;
+            pullEntry.completed = Math.floor(total * 0.65);
+            emitBackendEvent('mosaic://pull-progress', { model, status: 'downloading', completed: pullEntry.completed, total, done: false, error: null });
+            window.setTimeout(() => {
+              if (pullEntry.cancelled || state.activePulls[model] !== pullEntry) return;
+              delete state.activePulls[model];
+              if (!state.installed.some((m) => m.name === model)) state.installed.push({ name: model, size_bytes: total, digest: 'sha256:e2e000112233', modified_at: new Date().toISOString(), family: 'qwen', parameter_size: '0.5B', quantization_level: 'Q4_K_M' });
+              emitBackendEvent('mosaic://pull-progress', { model, status: 'success', completed: total, total, done: true, error: null });
+            }, 400);
+          }, 200);
+        }, 50);
         return null;
       }
       case 'cancel_pull': {
@@ -201,23 +207,24 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
         validateModel(model);
         if (!state.bootstrap.library_connected) throw 'external model library is required before running models';
         if (!state.bootstrap.ollama.api_reachable) throw 'Ollama API is unreachable';
-        const sid = String(req.session_id ?? 'session-1');
+        const sid = String(req.session_id ?? 'session-1'), seq = ++activeChatSeq;
         state.activeInferenceSession = sid;
         window.setTimeout(() => {
-          if (state.activeInferenceSession !== sid) return;
+          if (activeChatSeq !== seq || state.activeInferenceSession !== sid) return;
           emitBackendEvent('mosaic://chat-token', { session_id: sid, token: 'Local ', done: false, error: null });
           window.setTimeout(() => {
-            if (state.activeInferenceSession !== sid) return;
+            if (activeChatSeq !== seq || state.activeInferenceSession !== sid) return;
             if (state.streamHttpError) { const err = state.streamHttpError; state.activeInferenceSession = null; emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: err }); return; }
             emitBackendEvent('mosaic://chat-token', { session_id: sid, token: 'inference ok.', done: false, error: null });
-            window.setTimeout(() => { if (state.activeInferenceSession === sid) { state.activeInferenceSession = null; emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: null }); } }, 60);
-          }, 60);
-        }, 40);
+            window.setTimeout(() => { if (activeChatSeq === seq && state.activeInferenceSession === sid) { state.activeInferenceSession = null; emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: null }); } }, 400);
+          }, 200);
+        }, 50);
         return null;
       }
       case 'stop_chat_stream': {
         if (!state.activeInferenceSession) return false;
         const sid = state.activeInferenceSession;
+        activeChatSeq += 1;
         state.activeInferenceSession = null;
         emitBackendEvent('mosaic://chat-token', { session_id: sid, token: '', done: true, error: null });
         return true;
@@ -251,6 +258,7 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
         if (args.confirmed !== true) throw 'Explicit confirmation is required before migrating models.';
         if (!state.bootstrap.library_connected) throw 'No external library connected.';
         if (!state.migrationPreview.fits_on_external) throw 'Insufficient free space on external drive for migration.';
+        if (state.installed.length === 0) state.installed.push({ name: 'llama3.2:3b', size_bytes: 2_020_000_000, digest: 'sha256:a1b2c3d4e5f6', modified_at: new Date().toISOString(), family: 'llama', parameter_size: '3.2B', quantization_level: 'Q4_K_M' });
         return { files_copied: state.migrationPreview.blob_count, bytes_copied: state.migrationPreview.total_bytes };
       case 'list_cluster_workers': return structuredClone(state.workers);
       case 'add_cluster_worker': {
@@ -326,6 +334,7 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
   };
   window.__MOSAIC_E2E__ = {
     profile: state.profile, invokeLog, emittedEvents, state, emitBackendEvent,
+    hasEventListener: (event) => (eventListeners.get(event)?.length ?? 0) > 0,
     setVolumes: (volumes) => { state.bootstrap.external_volumes = structuredClone(volumes); syncActiveLibrary(); },
     setFreeBytes: (id, freeBytes) => {
       const vol = state.bootstrap.external_volumes.find((v) => v.volume_identifier === id);

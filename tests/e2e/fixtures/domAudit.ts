@@ -33,7 +33,9 @@ export async function auditOverflowAndButtons(page: Page, contextLabel: string):
     const docOverflow = document.documentElement.scrollWidth > window.innerWidth;
     const bodyOverflow = document.body.scrollWidth > window.innerWidth;
     const buttons = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('main button, header button, [role="dialog"] button')
+      document.querySelectorAll<HTMLButtonElement>(
+        'main button, header button, [role="dialog"] button, .mosaic-modal button'
+      )
     ).filter((btn) => {
       if (btn.classList.contains('mosaic-nav-btn')) return false;
       const r = btn.getBoundingClientRect();
@@ -82,11 +84,24 @@ export async function auditRouteVisuals(
 
   const visual = await page.evaluate(() => {
     const parseAlpha = (bg: string): number => {
-      if (bg === 'transparent') return 0;
-      const m = bg.match(/rgba?\(([^)]+)\)/i);
-      if (!m) return 1;
-      const parts = m[1].split(/[,\s/]+/).filter(Boolean);
-      return parts.length >= 4 ? Number(parts[3]) : 1;
+      const norm = bg.trim().toLowerCase();
+      if (!norm || norm === 'transparent') return 0;
+      const toUnit = (raw: string): number => {
+        const t = raw.trim();
+        const num = Number.parseFloat(t.endsWith('%') ? t.slice(0, -1) : t);
+        if (!Number.isFinite(num)) return 1;
+        return t.endsWith('%') ? num / 100 : num;
+      };
+      const slash = norm.match(
+        /^(?:oklch|oklab|lch|lab|color|hsla?|rgba?)\([^)]*\/\s*([\d.]+%?)\s*\)$/
+      );
+      if (slash) return toUnit(slash[1]);
+      const legacy = norm.match(/^(?:rgba|hsla)\(([^)]+)\)$/);
+      if (legacy) {
+        const parts = legacy[1].split(',').map((p) => p.trim()).filter(Boolean);
+        if (parts.length >= 4) return toUnit(parts[3]);
+      }
+      return 1;
     };
 
     const glassEls = Array.from(
@@ -104,7 +119,7 @@ export async function auditRouteVisuals(
     for (const el of glassEls) {
       const s = getComputedStyle(el);
       const blur = s.backdropFilter || (s as CSSStyleDeclaration & { webkitBackdropFilter?: string }).webkitBackdropFilter || '';
-      if (!blur.includes('blur(')) missingBlur.push(el.className);
+      if (!blur.includes('blur(') || /\bblur\(0(?:px)?\)/i.test(blur)) missingBlur.push(el.className);
       if (parseAlpha(s.backgroundColor) >= 1) opaqueSurfaces.push(`${el.className}: ${s.backgroundColor}`);
       if (
         (el.classList.contains('mosaic-panel') || el.classList.contains('mosaic-modal')) &&
@@ -115,7 +130,12 @@ export async function auditRouteVisuals(
     }
 
     const neonGradients: string[] = [];
-    const allVisible = Array.from(document.querySelectorAll<HTMLElement>('body *')).slice(0, 300);
+    const allVisible = Array.from(document.querySelectorAll<HTMLElement>('body *')).filter((el) => {
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility === 'hidden') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
     for (const el of allVisible) {
       const bgImg = getComputedStyle(el).backgroundImage;
       if (

@@ -168,11 +168,15 @@ test.describe('Tier 2 — F7 Settings, Diagnostics & Cluster Security Boundaries
     const tracker = attachRuntimeErrorTracker(page);
     await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
+    await navigateTo(page, 'Settings');
+    const input = page.getByLabel('Ollama Loopback Endpoint');
     for (const badUrl of ['http://0.0.0.0:11434', 'http://192.168.1.50:11434', 'http://169.254.169.254', 'https://127.0.0.1:11434']) {
-      const res = await invokeE2E(page, 'update_setting', { key: 'ollama_endpoint', value: badUrl });
-      expect(res.ok).toBe(false);
-      expect(res.error).toMatch(/loopback/i);
+      await input.fill(badUrl);
+      await page.getByRole('button', { name: 'Save Settings' }).click();
+      await expect(page.getByText(new RegExp(`loopback.*${badUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'))).toBeVisible();
     }
+    const saved = await page.evaluate(() => window.__MOSAIC_E2E__?.state.bootstrap.settings.ollama_endpoint);
+    expect(saved).toBe('http://127.0.0.1:11434');
     tracker.assertClean();
   });
 
@@ -213,10 +217,16 @@ test.describe('Tier 2 — F7 Settings, Diagnostics & Cluster Security Boundaries
     const tracker = attachRuntimeErrorTracker(page);
     await installTauriMock(page, 'cluster-3node');
     await openApp(page);
+    await navigateTo(page, 'Discover Models');
+    await cardByModel(page, 'Qwen 3 235B-A22B MoE').getByRole('button', { name: 'View details' }).click();
+    await page.getByRole('button', { name: 'Compute Adaptive / Cluster Plan' }).click();
     for (const badPath of ['models/weights.bin', '../../etc/passwd.gguf', '/abs/path/a.gguf']) {
-      const res = await invokeE2E(page, 'launch_cluster_runtime', { ggufRelPath: badPath, runtimeFlags: [], confirmed: true });
-      expect(res.ok).toBe(false);
+      await page.getByLabel(/GGUF/i).fill(badPath);
+      await page.getByRole('button', { name: /Launch Cluster Runtime/i }).click();
+      await page.getByRole('dialog').last().getByRole('button', { name: /Launch|Confirm/i }).click();
+      await expect(page.getByText(/InvalidPath|gguf|traversal|\.\./i)).toBeVisible();
     }
+    expect(await page.evaluate(() => window.__MOSAIC_E2E__?.state.clusterRuntimeRunning)).toBe(false);
     tracker.assertClean();
   });
 
@@ -260,15 +270,17 @@ test.describe('Tier 2 — F8 Adaptive Fit & Pull Cancellation Boundaries @tier2 
     const tracker = attachRuntimeErrorTracker(page);
     await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
-    const maxQ = await invokeE2E<Array<{ model: { ollama_name: string }; fit: { total_estimated_bytes: number } }>>(
-      page, 'list_catalog_with_fit', { contextLength: 32768, executionProfile: 'max_quality', kvCacheType: 'f16' }
-    );
-    const constrained = await invokeE2E<Array<{ model: { ollama_name: string }; fit: { total_estimated_bytes: number } }>>(
-      page, 'list_catalog_with_fit', { contextLength: 32768, executionProfile: 'constrained_memory', kvCacheType: 'q4_0' }
-    );
-    const mMax = maxQ.value?.find((x) => x.model.ollama_name.includes('IQ2_XS'))?.fit.total_estimated_bytes ?? 0;
-    const mCon = constrained.value?.find((x) => x.model.ollama_name.includes('IQ2_XS'))?.fit.total_estimated_bytes ?? 0;
-    expect(mCon).toBeLessThan(mMax);
+    await navigateTo(page, 'Discover Models');
+    await page.getByLabel('Assumed context length').selectOption('32768');
+    await page.getByLabel(/Execution profile/i).selectOption('max_quality');
+    await page.getByLabel(/KV cache/i).selectOption('f16');
+    const card = cardByModel(page, 'Qwen3 30B-A3B MoE (IQ2_XS)');
+    const readMem = async () => Number((await card.innerText()).match(/Est\. Runtime Memory\s*([\d.]+)\s*GiB/i)?.[1] ?? 0);
+    let maxMem = 0;
+    await expect.poll(async () => { maxMem = await readMem(); return maxMem; }).toBeGreaterThan(11);
+    await page.getByLabel(/Execution profile/i).selectOption('constrained_memory');
+    await page.getByLabel(/KV cache/i).selectOption('q4_0');
+    await expect.poll(async () => await readMem()).toBeLessThan(maxMem);
     tracker.assertClean();
   });
 
@@ -287,10 +299,14 @@ test.describe('Tier 2 — F8 Adaptive Fit & Pull Cancellation Boundaries @tier2 
 
   test('T2-F8-04: cancel_pull guarantees terminal done: true and clears progress banner @m3-wiring @tier2 @F8', async ({ page }) => {
     const tracker = attachRuntimeErrorTracker(page);
-    await installTauriMock(page, 'active-pull-stream');
+    await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
-    const res = await invokeE2E<boolean>(page, 'cancel_pull', { model: 'llama3.2:3b' });
-    expect(res.value).toBe(true);
+    await navigateTo(page, 'Discover Models');
+    await cardByModel(page, 'Qwen 2.5 0.5B').getByRole('button', { name: 'Download', exact: true }).click();
+    const cancelBtn = page.getByRole('button', { name: /Cancel Pull/i });
+    await expect(cancelBtn).toBeVisible();
+    await cancelBtn.click();
+    await expect(cancelBtn).toBeHidden();
     const lastEv = (await getEmittedEvents(page)).filter((e) => e.event === 'mosaic://pull-progress').pop();
     expect((lastEv?.payload as { done?: boolean; error?: string })?.done).toBe(true);
     expect((lastEv?.payload as { error?: string })?.error).toBe('Pull cancelled by user.');

@@ -43,7 +43,7 @@ test.describe('Tier 1 — F1 Onboarding & External Drive Gate @tier1 @F1', () =>
     await expect(useButtons.nth(0)).toBeDisabled();
     await expect(useButtons.nth(1)).toBeEnabled();
     await useButtons.nth(1).click();
-    await expect(page.getByRole('heading', { name: 'External Model Library' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'External Model Library', exact: true })).toBeVisible();
     await expect(page.getByText('MosaicSSD (Ready)')).toBeVisible();
     tracker.assertClean();
   });

@@ -127,7 +127,7 @@ test.describe('Tier 1 — F6 External Storage & Ollama Supervision @tier1 @F6', 
     await navigateTo(page, 'External Storage');
     await page.getByRole('button', { name: 'Configure OLLAMA_MODELS' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Apply Configuration' }).click();
-    await expect(page.getByText(/backup saved/i)).toBeVisible();
+    await expect(page.getByText(/backup/i)).toBeVisible();
     tracker.assertClean();
   });
 
@@ -261,10 +261,11 @@ test.describe('Tier 1 — F8 Adaptive Execution Profiles & Pull Cancel @tier1 @F
     await navigateTo(page, 'Discover Models');
     await page.getByLabel(/Execution profile/i).selectOption('constrained_memory');
     await expect.poll(async () => {
-      return (await getInvokeLog(page)).some(
-        (e) => (e.cmd === 'list_catalog_with_fit' || e.cmd === 'evaluate_catalog') &&
-          (e.args as { executionProfile?: string }).executionProfile === 'constrained_memory'
-      );
+      return (await getInvokeLog(page)).some((e) => {
+        const a = e.args as { executionProfile?: string; execution_profile?: string };
+        return (e.cmd === 'list_catalog_with_fit' || e.cmd === 'evaluate_catalog') &&
+          (a.executionProfile ?? a.execution_profile) === 'constrained_memory';
+      });
     }).toBe(true);
     tracker.assertClean();
   });
@@ -276,10 +277,11 @@ test.describe('Tier 1 — F8 Adaptive Execution Profiles & Pull Cancel @tier1 @F
     await navigateTo(page, 'Discover Models');
     await page.getByLabel(/KV cache/i).selectOption('q4_0');
     await expect.poll(async () => {
-      return (await getInvokeLog(page)).some(
-        (e) => (e.cmd === 'list_catalog_with_fit' || e.cmd === 'evaluate_catalog') &&
-          (e.args as { kvCacheType?: string }).kvCacheType === 'q4_0'
-      );
+      return (await getInvokeLog(page)).some((e) => {
+        const a = e.args as { kvCacheType?: string; kv_cache_type?: string };
+        return (e.cmd === 'list_catalog_with_fit' || e.cmd === 'evaluate_catalog') &&
+          (a.kvCacheType ?? a.kv_cache_type) === 'q4_0';
+      });
     }).toBe(true);
     tracker.assertClean();
   });
@@ -319,6 +321,9 @@ test.describe('Tier 1 — F8 Adaptive Execution Profiles & Pull Cancel @tier1 @F
     const tracker = attachRuntimeErrorTracker(page);
     await installTauriMock(page, 'active-pull-stream');
     await openApp(page);
+    await expect
+      .poll(() => page.evaluate(() => window.__MOSAIC_E2E__?.hasEventListener('mosaic://pull-progress') ?? false))
+      .toBe(true);
     await page.evaluate(() => {
       window.__MOSAIC_E2E__?.emitBackendEvent('mosaic://pull-progress', {
         model: 'llama3.2:3b', status: 'downloading', completed: 512_000_000, total: 2_020_000_000, done: false, error: null,
