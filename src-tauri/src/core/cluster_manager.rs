@@ -234,6 +234,13 @@ impl ClusterRuntimeRegistry {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut proc_child) = guard.take() {
                 let _ = proc_child.start_kill();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = proc_child.wait().await;
+                    });
+                } else {
+                    let _ = proc_child.try_wait();
+                }
                 return true;
             }
         }

@@ -77,18 +77,58 @@ async fn catalog_batch_params_and_https_refresh_hardening() {
 #[test]
 fn gguf_validation_skips_appledouble_and_non_gguf() {
     let root = std::env::temp_dir().join(format!("mosaic-gguf-{}", Uuid::new_v4()));
-    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(root.join(".hidden")).unwrap();
     fs::write(root.join("model.gguf"), b"GGUF").unwrap();
     fs::write(root.join("._model.gguf"), b"appledouble").unwrap();
+    fs::write(root.join(".hidden/secret.gguf"), b"hidden").unwrap();
     fs::write(root.join(".DS_Store"), b"ds").unwrap();
     fs::write(root.join("weights.bin"), b"bin").unwrap();
 
+    #[cfg(unix)]
+    {
+        let outside = std::env::temp_dir().join(format!("mosaic-gguf-ext-{}", Uuid::new_v4()));
+        fs::write(&outside, b"GGUF").unwrap();
+        let _ = std::os::unix::fs::symlink(&outside, root.join("escape.gguf"));
+        let _ = std::os::unix::fs::symlink(root.join("missing.gguf"), root.join("broken.gguf"));
+        assert!(validate_gguf_path(&root, "escape.gguf").is_err());
+        assert_eq!(scan_gguf_files(&root).unwrap(), vec!["model.gguf".to_string()]);
+        let _ = fs::remove_file(&outside);
+    }
+
     assert!(validate_gguf_path(&root, "model.gguf").is_ok());
     assert!(validate_gguf_path(&root, "._model.gguf").is_err());
+    assert!(validate_gguf_path(&root, ".hidden/secret.gguf").is_err());
     assert!(validate_gguf_path(&root, "weights.bin").is_err());
     assert_eq!(scan_gguf_files(&root).unwrap(), vec!["model.gguf".to_string()]);
 
     fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn catalog_snapshot_sqlite_file_persistence_roundtrip() {
+    let base = std::env::temp_dir().join(format!("mosaic-cat-db-{}", Uuid::new_v4()));
+    let db_path = base.join("mosaic.db");
+    let entries = model_catalog::load_curated_catalog();
+    let subset = entries[..3].to_vec();
+    let snap_json = serde_json::to_string(&subset).unwrap();
+
+    {
+        let store = SettingsStore::open(&db_path).unwrap();
+        store.save_catalog_snapshot_json(&snap_json).unwrap();
+    }
+
+    let reopened = SettingsStore::open(&db_path).unwrap();
+    let loaded = model_catalog::load_effective_catalog(Some(&reopened));
+    assert_eq!(loaded.len(), 3);
+    assert_eq!(loaded[0].ollama_name, subset[0].ollama_name);
+    assert_eq!(loaded[2].display_name, subset[2].display_name);
+
+    reopened.save_catalog_snapshot_json("invalid-json").unwrap();
+    assert_eq!(
+        model_catalog::load_effective_catalog(Some(&reopened)).len(),
+        entries.len()
+    );
+    fs::remove_dir_all(&base).unwrap();
 }
 
 #[tokio::test]

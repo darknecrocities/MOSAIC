@@ -15,7 +15,11 @@ def stage_bundle() -> None:
     if DEST_DIR.exists():
         shutil.rmtree(DEST_DIR)
     (DEST_DIR / "src").mkdir(parents=True, exist_ok=True)
-    shutil.copytree(SRC_PKG, DEST_DIR / "src" / "mosaic_analytics")
+    shutil.copytree(
+        SRC_PKG,
+        DEST_DIR / "src" / "mosaic_analytics",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     shutil.copy2(ROOT / "python-analytics" / "pyproject.toml", DEST_DIR / "pyproject.toml")
 
     main_entry = DEST_DIR / "src" / "mosaic_analytics" / "__main__.py"

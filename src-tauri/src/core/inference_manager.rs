@@ -69,7 +69,9 @@ pub struct ChatStreamRequest {
 
 struct ActiveInference {
     run_id: u64,
+    cancelling: bool,
     cancel_tx: watch::Sender<bool>,
+    done_tx: watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -134,9 +136,12 @@ impl InferenceRegistry {
 
     pub fn stop_active(&self) -> bool {
         if let Ok(mut guard) = self.active.lock() {
-            if let Some(entry) = guard.current.take() {
-                let _ = entry.cancel_tx.send(true);
-                return true;
+            if let Some(entry) = guard.current.as_mut() {
+                if !entry.cancelling {
+                    entry.cancelling = true;
+                    let _ = entry.cancel_tx.send(true);
+                    return true;
+                }
             }
         }
         false
@@ -183,57 +188,63 @@ impl InferenceRegistry {
         let base_url = ollama_manager::validate_loopback_endpoint(&endpoint)?;
         let payload = build_ollama_chat_payload(&req)?;
 
-        let (run_id, mut cancel_rx) = {
+        let (run_id, mut cancel_rx, done_tx, prev_done_rx) = {
             let mut guard = self
                 .active
                 .lock()
                 .map_err(|_| InferenceError::RemoteError("inference lock poisoned".into()))?;
-            if let Some(prev) = guard.current.take() {
+            let prev_done_rx = guard.current.take().map(|prev| {
+                let rx = prev.done_tx.subscribe();
                 let _ = prev.cancel_tx.send(true);
-            }
+                rx
+            });
             guard.next_id += 1;
             let run_id = guard.next_id;
             let (cancel_tx, cancel_rx) = watch::channel(false);
-            guard.current = Some(ActiveInference { run_id, cancel_tx });
-            (run_id, cancel_rx)
+            let (done_tx, _) = watch::channel(false);
+            guard.current = Some(ActiveInference {
+                run_id,
+                cancelling: false,
+                cancel_tx,
+                done_tx: done_tx.clone(),
+            });
+            (run_id, cancel_rx, done_tx, prev_done_rx)
         };
 
         let registry = self.active.clone();
         let sid = req.session_id;
         tokio::spawn(async move {
-            match stream_chat(base_url.as_str(), &sid, &payload, &mut cancel_rx, &mut emit).await {
-                Ok(ChatOutcome::Cancelled) => {
-                    emit(ChatTokenEvent {
-                        session_id: sid.clone(),
-                        token: String::new(),
-                        done: true,
-                        error: None,
-                    });
-                }
-                Ok(ChatOutcome::Completed { sent_done }) => {
-                    if !sent_done {
-                        emit(ChatTokenEvent {
-                            session_id: sid.clone(),
-                            token: String::new(),
-                            done: true,
-                            error: None,
-                        });
-                    }
-                }
-                Err(err) => {
-                    emit(ChatTokenEvent {
-                        session_id: sid.clone(),
-                        token: String::new(),
-                        done: true,
-                        error: Some(err.to_string()),
-                    });
-                }
+            if let Some(mut prev_done) = prev_done_rx {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    prev_done.wait_for(|done| *done),
+                )
+                .await;
+            }
+            let outcome = if *cancel_rx.borrow() {
+                Ok(ChatOutcome::Cancelled)
+            } else {
+                stream_chat(base_url.as_str(), &sid, &payload, &mut cancel_rx, &mut emit).await
+            };
+            let terminal_err = match outcome {
+                Ok(ChatOutcome::Cancelled) => Some(None),
+                Ok(ChatOutcome::Completed { sent_done }) => (!sent_done).then_some(None),
+                Err(err) => Some(Some(err.to_string())),
+            };
+            if let Some(error) = terminal_err {
+                emit(ChatTokenEvent {
+                    session_id: sid.clone(),
+                    token: String::new(),
+                    done: true,
+                    error,
+                });
             }
             if let Ok(mut guard) = registry.lock() {
                 if guard.current.as_ref().is_some_and(|e| e.run_id == run_id) {
                     guard.current = None;
                 }
             }
+            let _ = done_tx.send(true);
         });
         Ok(())
     }

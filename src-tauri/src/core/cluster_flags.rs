@@ -10,29 +10,73 @@ use crate::security::path_guard;
 static OT_RE: OnceLock<Regex> = OnceLock::new();
 static FLOAT_RE: OnceLock<Regex> = OnceLock::new();
 
+fn is_blocked_v4(v4: std::net::Ipv4Addr) -> bool {
+    v4.is_link_local() || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+}
+
+fn is_non_canonical_ip_hostname(host: &str) -> bool {
+    !host.is_empty()
+        && host.split('.').all(|seg| {
+            !seg.is_empty()
+                && (seg.bytes().all(|b| b.is_ascii_digit())
+                    || ((seg.starts_with("0x") || seg.starts_with("0X"))
+                        && seg.len() > 2
+                        && seg[2..].bytes().all(|b| b.is_ascii_hexdigit())))
+        })
+}
+
 pub fn validate_worker_host(host: &str, allow_lan: bool) -> Result<(), ClusterError> {
-    let trimmed = host.trim();
-    if trimmed.is_empty() || trimmed.len() > 253 {
+    let clean = host.trim().trim_end_matches('.');
+    if clean.is_empty() || clean.len() > 253 {
         return Err(ClusterError::InvalidHost(host.to_string()));
     }
-    if trimmed == "169.254.169.254" || trimmed.eq_ignore_ascii_case("metadata.google.internal") {
+    let lower = clean.to_ascii_lowercase();
+    if lower == "metadata.google.internal"
+        || lower == "metadata"
+        || lower.starts_with("metadata.")
+        || lower.ends_with(".internal")
+    {
         return Err(ClusterError::InvalidHost(
             "cloud metadata endpoints are strictly blocked".into(),
         ));
     }
-    let is_loopback = trimmed == "127.0.0.1" || trimmed == "localhost" || trimmed == "::1";
+    let is_loopback = clean == "127.0.0.1" || lower == "localhost" || clean == "::1";
     if !is_loopback && !allow_lan {
         return Err(ClusterError::InvalidHost(
             "non-loopback LAN/Tailscale workers require explicit opt-in".into(),
         ));
     }
-    if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        if ip.is_unspecified() || ip.is_multicast() {
-            return Err(ClusterError::InvalidHost(host.to_string()));
+    if let Ok(ip) = clean.parse::<IpAddr>() {
+        match ip {
+            IpAddr::V4(v4) if is_blocked_v4(v4) => {
+                return Err(ClusterError::InvalidHost(
+                    "cloud metadata endpoints are strictly blocked".into(),
+                ));
+            }
+            IpAddr::V6(v6) => {
+                let is_aws_imds = v6.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254];
+                let is_link_local = (v6.segments()[0] & 0xffc0) == 0xfe80;
+                let mapped_blocked = v6.to_ipv4_mapped().is_some_and(is_blocked_v4)
+                    || (!v6.is_loopback() && v6.to_ipv4().is_some_and(is_blocked_v4));
+                if is_aws_imds
+                    || is_link_local
+                    || mapped_blocked
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                {
+                    return Err(ClusterError::InvalidHost(
+                        "cloud metadata endpoints are strictly blocked".into(),
+                    ));
+                }
+            }
+            IpAddr::V4(_) => {}
         }
-    } else if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    } else if is_non_canonical_ip_hostname(clean)
+        || clean.starts_with('.')
+        || clean.contains("..")
+        || !clean
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
     {
         return Err(ClusterError::InvalidHost(host.to_string()));
     }
@@ -47,6 +91,14 @@ pub fn validate_gguf_path(library_root: &Path, gguf_rel_path: &str) -> Result<Pa
     let trimmed = gguf_rel_path.trim();
     if trimmed.is_empty() || trimmed.contains('\0') {
         return Err("GGUF relative path cannot be empty.".into());
+    }
+    for comp in Path::new(trimmed).components() {
+        if let std::path::Component::Normal(seg) = comp {
+            let name = seg.to_str().ok_or_else(|| "GGUF path contains invalid UTF-8.".to_string())?;
+            if is_apple_double_or_hidden(name) {
+                return Err(format!("Refusing hidden or AppleDouble path component: {name}"));
+            }
+        }
     }
     let model_path = path_guard::resolve_within(library_root, Path::new(trimmed))
         .map_err(|e| e.to_string())?;
@@ -81,6 +133,12 @@ pub fn scan_gguf_files(library_root: &Path) -> Result<Vec<String>, String> {
             continue;
         };
         for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue;
+            }
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
@@ -88,12 +146,13 @@ pub fn scan_gguf_files(library_root: &Path) -> Result<Vec<String>, String> {
             if is_apple_double_or_hidden(name) {
                 continue;
             }
-            if path.is_dir() {
+            if ft.is_dir() {
                 stack.push(path);
-            } else if path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+            } else if ft.is_file()
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
             {
                 if let Ok(rel) = path.strip_prefix(library_root) {
                     results.push(rel.to_string_lossy().to_string());
@@ -250,6 +309,14 @@ mod tests {
             vec!["--port", "9999"],
             vec!["-m", "/etc/passwd"],
             vec!["--rpc", "169.254.169.254:80"],
+            vec!["--rpc=[::ffff:169.254.169.254]:80"],
+            vec!["--rpc=[::ffff:a9fe:a9fe]:80"],
+            vec!["--rpc=169.254.170.2:80"],
+            vec!["--rpc=[fd00:ec2::254]:80"],
+            vec!["--rpc=metadata.google.internal.:80"],
+            vec!["--rpc=2852039166:80"],
+            vec!["--rpc=0251.0376.0251.0376:80"],
+            vec!["--rpc=[fe80::1]:80"],
             vec!["-ngl", "--host"],
             vec!["-ot", "bad/path=CPU"],
         ] {
