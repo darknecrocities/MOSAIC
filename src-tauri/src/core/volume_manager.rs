@@ -237,4 +237,10 @@ mod tests {
         assert!(find_live_writable_volume(&vols, "RO-1").is_none());
         assert_eq!(find_live_writable_volume(&vols, "RW-1").unwrap().free_bytes, 1500);
     }
+
+    #[test]
+    fn prepare_safe_eject_refuses_when_operations_are_active() {
+        let err = prepare_safe_eject("/Volumes/One Touch", true).unwrap_err();
+        assert!(err.to_string().contains("Stop active model downloads or inference before ejecting."));
+    }
 }

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mosaic_lib::core::download_manager::{DownloadError, DownloadRegistry, PullProgressEvent};
-use mosaic_lib::core::inference_manager::{ChatMessage, ChatStreamRequest, ChatTokenEvent, InferenceRegistry};
+use mosaic_lib::core::inference_manager::{self, ChatMessage, ChatStreamRequest, ChatTokenEvent, InferenceRegistry};
 use mosaic_lib::core::model_library;
 use mosaic_lib::core::ollama_supervisor::OllamaSupervisor;
 use mosaic_lib::core::settings_store::{ActiveLibraryRecord, AppSettingsSnapshot, SettingsStore};
@@ -163,6 +163,18 @@ async fn show_model_details_and_supervisor_gates() {
     let sys = sample_sys(8 * 1024_u64.pow(3), "Apple M3");
     assert!(sup.start_managed("http://127.0.0.1:11434", "/tmp/m", &settings, &sys, false).await.is_err());
     assert!(sup.stop_managed("http://127.0.0.1:11434", false).await.is_err());
+    assert!(!sup.stop_if_running().await);
+
+    let err_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let err_addr = err_listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut sock, _)) = err_listener.accept().await {
+            let mut buf = [0_u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n").await;
+        }
+    });
+    assert!(inference_manager::unload_model(&format!("http://{err_addr}"), "llama3.2:1b").await.is_err());
 }
 
 #[test]

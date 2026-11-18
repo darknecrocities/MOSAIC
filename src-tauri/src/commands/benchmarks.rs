@@ -117,7 +117,7 @@ pub async fn run_model_benchmark(
     let installed = model_library::list_installed_models(&settings.ollama_endpoint)
         .await
         .ok()
-        .and_then(|list| list.into_iter().find(|m| m.name == model));
+        .and_then(|list| list.into_iter().find(|m| model_names_match(&m.name, &model)));
     let model_size_bytes = installed.as_ref().map(|m| m.size_bytes);
     let model_digest = installed.as_ref().map(|m| m.digest.clone());
     let quantization = installed.as_ref().and_then(|m| m.quantization_level.clone());
@@ -190,6 +190,13 @@ pub async fn run_model_benchmark(
         .map_err(|e| e.to_string())?;
     let _ = telemetry::log_diagnostic(&state.store, "info", "benchmark", &format!("Completed benchmark {} for {model}", saved.id));
     Ok(saved)
+}
+
+fn model_names_match(installed_name: &str, requested_name: &str) -> bool {
+    fn norm(s: &str) -> &str {
+        s.strip_suffix(":latest").unwrap_or(s)
+    }
+    installed_name == requested_name || norm(installed_name) == norm(requested_name)
 }
 
 fn default_batches_opts(
@@ -277,4 +284,20 @@ pub async fn export_benchmark_report(
         format: val["format"].as_str().unwrap_or(&format).to_string(),
         content: val["content"].as_str().unwrap_or("").to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_names_match;
+
+    #[test]
+    fn model_names_match_normalizes_latest_tag() {
+        assert!(model_names_match("llama3.2:latest", "llama3.2"));
+        assert!(model_names_match("llama3.2", "llama3.2:latest"));
+        assert!(model_names_match(
+            "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS",
+            "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS"
+        ));
+        assert!(!model_names_match("llama3.2:3b", "llama3.2:1b"));
+    }
 }

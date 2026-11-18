@@ -53,12 +53,12 @@ def discrete_8gb() -> dict[str, Any]:
 @pytest.fixture()
 def qwen3_30b_iq2() -> dict[str, Any]:
     return {
-        "ollama_name": "hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS",
+        "ollama_name": "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS",
         "parameter_billions": 30.5,
         "active_parameter_billions": 3.3,
         "is_moe": True,
         "quantization": "IQ2_XS",
-        "download_size_bytes": 9_200_000_000,
+        "download_size_bytes": 9_140_316_832,
         "n_layers": 48,
         "n_kv_heads": 4,
         "head_dim": 128,
