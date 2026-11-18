@@ -51,7 +51,13 @@ fn dir_stats(root: &Path, sub: &str) -> (usize, u64) {
             if should_skip_entry(&path) {
                 continue;
             }
-            if path.is_dir() {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
                 stack.push(path);
             } else if let Ok(meta) = entry.metadata() {
                 count += 1;
@@ -135,7 +141,13 @@ pub fn copy_internal_models(
                 if should_skip_entry(&path) {
                     continue;
                 }
-                if path.is_dir() {
+                let Ok(ft) = entry.file_type() else {
+                    continue;
+                };
+                if ft.is_symlink() {
+                    continue;
+                }
+                if ft.is_dir() {
                     stack.push(path);
                     continue;
                 }
@@ -164,7 +176,21 @@ pub fn copy_internal_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use uuid::Uuid;
+
+    static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    struct HomeGuard(Option<std::ffi::OsString>);
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = &self.0 {
+                std::env::set_var("HOME", prev);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
 
     #[test]
     fn copy_requires_confirmation_and_copies_safely() {
@@ -173,6 +199,47 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
         let err = copy_internal_models(&dest, 10_000_000_000, false).unwrap_err();
         assert!(err.contains("confirmation"));
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn copy_internal_models_succeeds_on_fresh_empty_dest_and_skips_appledouble() {
+        let _lock = HOME_LOCK.lock().unwrap();
+        let base = std::env::temp_dir().join(format!("mosaic-mig-e2e-{}", Uuid::new_v4()));
+        let fake_home = base.join("home");
+        let models = fake_home.join(".ollama").join("models");
+        let blobs = models.join("blobs");
+        let manifests = models.join("manifests").join("registry.ollama.ai").join("library").join("qwen3");
+        let dest = base.join("fresh-external");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::create_dir_all(&manifests).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+
+        fs::write(blobs.join("sha256-real"), vec![b'A'; 1024]).unwrap();
+        fs::write(blobs.join("._sha256-real"), vec![b'B'; 4096]).unwrap();
+        fs::write(blobs.join(".DS_Store"), vec![b'C'; 512]).unwrap();
+        fs::write(manifests.join("latest"), vec![b'M'; 256]).unwrap();
+        fs::write(models.join("manifests").join("._latest"), vec![b'D'; 4096]).unwrap();
+
+        let _guard = HomeGuard(std::env::var_os("HOME"));
+        std::env::set_var("HOME", &fake_home);
+
+        let preview = preview_internal_migration(2000);
+        assert!(preview.exists);
+        assert_eq!(preview.blob_count, 1);
+        assert_eq!(preview.manifest_count, 1);
+        assert_eq!(preview.total_bytes, 1280);
+        assert!(preview.fits_on_external);
+
+        let res = copy_internal_models(&dest, 2000, true).expect("fresh empty dest migration");
+        assert_eq!(res.files_copied, 2);
+        assert_eq!(res.bytes_copied, 1280);
+        assert!(dest.join("blobs/sha256-real").is_file());
+        assert!(dest.join("manifests/registry.ollama.ai/library/qwen3/latest").is_file());
+        assert!(!dest.join("blobs/._sha256-real").exists());
+        assert!(!dest.join("blobs/.DS_Store").exists());
+        assert!(!dest.join("manifests/._latest").exists());
+
         fs::remove_dir_all(&base).unwrap();
     }
 }

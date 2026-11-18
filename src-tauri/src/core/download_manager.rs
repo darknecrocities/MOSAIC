@@ -42,7 +42,9 @@ pub struct PullProgressEvent {
 
 struct ActiveDownload {
     run_id: u64,
+    cancelling: bool,
     cancel_tx: watch::Sender<bool>,
+    done_tx: watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -68,9 +70,12 @@ impl DownloadRegistry {
 
     pub fn cancel(&self, model: &str) -> bool {
         if let Ok(mut state) = self.active.lock() {
-            if let Some(entry) = state.entries.remove(model) {
-                let _ = entry.cancel_tx.send(true);
-                return true;
+            if let Some(entry) = state.entries.get_mut(model) {
+                if !entry.cancelling {
+                    entry.cancelling = true;
+                    let _ = entry.cancel_tx.send(true);
+                    return true;
+                }
             }
         }
         false
@@ -146,24 +151,50 @@ impl DownloadRegistry {
         }
         let base_url = ollama_manager::validate_loopback_endpoint(&endpoint)?;
 
-        let (run_id, mut cancel_rx) = {
+        let (run_id, mut cancel_rx, done_tx, prev_done_rx) = {
             let mut state = self
                 .active
                 .lock()
                 .map_err(|_| DownloadError::RemoteError("download registry lock poisoned".into()))?;
-            if state.entries.contains_key(&model) {
-                return Err(DownloadError::AlreadyInProgress(model));
-            }
+            let prev_done_rx = if let Some(entry) = state.entries.get(&model) {
+                if !entry.cancelling {
+                    return Err(DownloadError::AlreadyInProgress(model));
+                }
+                Some(entry.done_tx.subscribe())
+            } else {
+                None
+            };
             state.next_id += 1;
             let run_id = state.next_id;
             let (cancel_tx, cancel_rx) = watch::channel(false);
-            state.entries.insert(model.clone(), ActiveDownload { run_id, cancel_tx });
-            (run_id, cancel_rx)
+            let (done_tx, _) = watch::channel(false);
+            state.entries.insert(
+                model.clone(),
+                ActiveDownload {
+                    run_id,
+                    cancelling: false,
+                    cancel_tx,
+                    done_tx: done_tx.clone(),
+                },
+            );
+            (run_id, cancel_rx, done_tx, prev_done_rx)
         };
 
         let registry = self.active.clone();
         tokio::spawn(async move {
-            match stream_pull(base_url.as_str(), &model, &mut cancel_rx, &mut emit).await {
+            if let Some(mut prev_done) = prev_done_rx {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    prev_done.wait_for(|done| *done),
+                )
+                .await;
+            }
+            let outcome = if *cancel_rx.borrow() {
+                Ok(PullOutcome::Cancelled)
+            } else {
+                stream_pull(base_url.as_str(), &model, &mut cancel_rx, &mut emit).await
+            };
+            match outcome {
                 Ok(PullOutcome::Cancelled) => {
                     emit(PullProgressEvent {
                         model: model.clone(),
@@ -202,6 +233,7 @@ impl DownloadRegistry {
                     state.entries.remove(&model);
                 }
             }
+            let _ = done_tx.send(true);
         });
         Ok(())
     }

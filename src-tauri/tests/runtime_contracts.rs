@@ -10,6 +10,7 @@ use mosaic_lib::core::system_probe::SystemProfile;
 use mosaic_lib::core::{benchmark_store, telemetry};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
 fn sample_sys(ram_avail: u64, cpu: &str) -> SystemProfile {
     SystemProfile {
@@ -46,21 +47,7 @@ fn active_lib() -> ActiveLibraryRecord {
 
 #[tokio::test]
 async fn download_registry_cooperative_cancel_and_dup_guard() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        if let Ok((mut sock, _)) = listener.accept().await {
-            let mut buf = [0_u8; 1024];
-            let _ = sock.read(&mut buf).await;
-            let body = "{\"status\":\"pulling manifest\"}\n";
-            let hdr = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n";
-            let chunk = format!("{:x}\r\n{body}\r\n", body.len());
-            let _ = sock.write_all(hdr.as_bytes()).await;
-            let _ = sock.write_all(chunk.as_bytes()).await;
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
-    });
-
+    let addr = spawn_streaming_mock("{\"status\":\"pulling manifest\"}\n").await;
     let reg = DownloadRegistry::default();
     let events: Arc<Mutex<Vec<PullProgressEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let sink_events = events.clone();
@@ -131,22 +118,7 @@ async fn inference_registry_cooperative_stop_and_adaptive_payload() {
     let reg = InferenceRegistry::default();
     let events: Arc<Mutex<Vec<ChatTokenEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let sink_ev = events.clone();
-    let req = ChatStreamRequest {
-        session_id: "sess-1".into(),
-        model: "qwen3:30b-a3b".into(),
-        messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
-        num_ctx: Some(8192),
-        temperature: Some(0.1),
-        execution_profile: Some("constrained_memory".into()),
-        kv_cache_type: Some("q4_0".into()),
-        num_gpu: Some(24),
-        num_batch: Some(128),
-        num_ubatch: Some(64),
-        num_thread: Some(8),
-        use_mmap: Some(true),
-        use_mlock: Some(false),
-        keep_alive: Some("30s".into()),
-    };
+    let req = sample_chat_req("sess-1");
     reg.start_chat_with_sink(format!("http://{addr}"), req, true, move |ev| {
         sink_ev.lock().unwrap().push(ev);
     })
@@ -234,4 +206,131 @@ fn device_profiles_dedup_and_fk_safe_prune_and_diagnostics() {
     let diags = telemetry::list_diagnostics(&store, 10).unwrap();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].message, "hello diag");
+}
+
+async fn spawn_streaming_mock(chunk_body: &'static str) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0_u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let hdr = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let chunk = format!("{:x}\r\n{chunk_body}\r\n", chunk_body.len());
+                let _ = sock.write_all(hdr.as_bytes()).await;
+                let _ = sock.write_all(chunk.as_bytes()).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn download_registry_cancel_teardown_ordering_20_cycles() {
+    let addr = spawn_streaming_mock("{\"status\":\"pulling manifest\"}\n").await;
+    let endpoint = format!("http://{addr}");
+    let reg = DownloadRegistry::default();
+
+    for cycle in 0..20 {
+        let events: Arc<Mutex<Vec<(u8, PullProgressEvent)>>> = Arc::new(Mutex::new(Vec::new()));
+        let (n1, n2, d2) = (Arc::new(Notify::new()), Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let (e1, s1) = (events.clone(), n1.clone());
+        reg.start_pull_with_sink(
+            endpoint.clone(), "qwen3:30b-a3b".into(), None, Some(active_lib()), true,
+            move |ev| {
+                if ev.done { std::thread::sleep(Duration::from_millis(3)); }
+                let first = ev.status == "pulling manifest";
+                e1.lock().unwrap().push((1, ev));
+                if first { s1.notify_one(); }
+            },
+        ).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), n1.notified()).await.unwrap();
+        assert!(reg.cancel("qwen3:30b-a3b"));
+        assert!(reg.has_active(), "has_active must remain true during teardown (cycle {cycle})");
+
+        let (e2, s2, done2) = (events.clone(), n2.clone(), d2.clone());
+        reg.start_pull_with_sink(
+            endpoint.clone(), "qwen3:30b-a3b".into(), None, Some(active_lib()), true,
+            move |ev| {
+                if ev.done { std::thread::sleep(Duration::from_millis(3)); }
+                let (first, is_done) = (ev.status == "pulling manifest", ev.done);
+                e2.lock().unwrap().push((2, ev));
+                if first { s2.notify_one(); }
+                if is_done { done2.notify_one(); }
+            },
+        ).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), n2.notified()).await.unwrap();
+        assert!(reg.cancel("qwen3:30b-a3b"));
+        tokio::time::timeout(Duration::from_secs(2), d2.notified()).await.unwrap();
+        for _ in 0..100 {
+            if !reg.has_active() { break; }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert!(!reg.has_active());
+
+        let seq = events.lock().unwrap();
+        let r1_done = seq.iter().position(|(r, ev)| *r == 1 && ev.done).unwrap();
+        let r2_first = seq.iter().position(|(r, _)| *r == 2).unwrap();
+        assert!(r1_done < r2_first, "out-of-order pull done on cycle {cycle}: {seq:?}");
+    }
+}
+
+fn sample_chat_req(session_id: &str) -> ChatStreamRequest {
+    ChatStreamRequest {
+        session_id: session_id.into(),
+        model: "qwen3:30b-a3b".into(),
+        messages: vec![ChatMessage { role: "user".into(), content: "hi".into() }],
+        num_ctx: Some(8192), temperature: Some(0.1),
+        execution_profile: Some("constrained_memory".into()), kv_cache_type: Some("q4_0".into()),
+        num_gpu: Some(24), num_batch: Some(128), num_ubatch: Some(64), num_thread: Some(8),
+        use_mmap: Some(true), use_mlock: Some(false), keep_alive: Some("30s".into()),
+    }
+}
+
+#[tokio::test]
+async fn inference_registry_preemption_teardown_ordering_20_cycles() {
+    let addr = spawn_streaming_mock("{\"message\":{\"role\":\"assistant\",\"content\":\"tok\"},\"done\":false}\n").await;
+    let endpoint = format!("http://{addr}");
+    let reg = InferenceRegistry::default();
+
+    for cycle in 0..20 {
+        let events: Arc<Mutex<Vec<(u8, ChatTokenEvent)>>> = Arc::new(Mutex::new(Vec::new()));
+        let (n1, n2, d2) = (Arc::new(Notify::new()), Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let (e1, s1) = (events.clone(), n1.clone());
+        reg.start_chat_with_sink(endpoint.clone(), sample_chat_req("same-session"), true, move |ev| {
+            if ev.done { std::thread::sleep(Duration::from_millis(3)); }
+            let first = ev.token == "tok";
+            e1.lock().unwrap().push((1, ev));
+            if first { s1.notify_one(); }
+        }).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), n1.notified()).await.unwrap();
+        if cycle % 2 == 0 {
+            assert!(reg.stop_active());
+            assert!(reg.is_running(), "is_running must remain true during teardown (cycle {cycle})");
+        }
+
+        let (e2, s2, done2) = (events.clone(), n2.clone(), d2.clone());
+        reg.start_chat_with_sink(endpoint.clone(), sample_chat_req("same-session"), true, move |ev| {
+            if ev.done { std::thread::sleep(Duration::from_millis(3)); }
+            let (first, is_done) = (ev.token == "tok", ev.done);
+            e2.lock().unwrap().push((2, ev));
+            if first { s2.notify_one(); }
+            if is_done { done2.notify_one(); }
+        }).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), n2.notified()).await.unwrap();
+        assert!(reg.stop_active());
+        tokio::time::timeout(Duration::from_secs(2), d2.notified()).await.unwrap();
+        for _ in 0..100 {
+            if !reg.is_running() { break; }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert!(!reg.is_running());
+
+        let seq = events.lock().unwrap();
+        let r1_done = seq.iter().position(|(r, ev)| *r == 1 && ev.done).unwrap();
+        let r2_first = seq.iter().position(|(r, _)| *r == 2).unwrap();
+        assert!(r1_done < r2_first, "out-of-order chat done on cycle {cycle}: {seq:?}");
+    }
 }
