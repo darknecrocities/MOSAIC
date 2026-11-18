@@ -6,6 +6,7 @@ interface ConfirmModalProps {
   description: string;
   confirmLabel: string;
   cancelLabel?: string;
+  variant?: 'primary' | 'danger';
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -16,6 +17,7 @@ export function ConfirmModal({
   description,
   confirmLabel,
   cancelLabel = 'Cancel',
+  variant = 'primary',
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -33,7 +35,7 @@ export function ConfirmModal({
           <h2 id="confirm-modal-title">{title}</h2>
           <button
             type="button"
-            className="mosaic-button-secondary"
+            className="mosaic-icon-btn"
             onClick={onCancel}
             aria-label="Close confirmation dialog"
           >
@@ -41,11 +43,15 @@ export function ConfirmModal({
           </button>
         </div>
         <p className="mosaic-subtitle">{description}</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+        <div className="mosaic-row-end">
           <button type="button" className="mosaic-button-secondary" onClick={onCancel}>
             {cancelLabel}
           </button>
-          <button type="button" className="mosaic-button" onClick={onConfirm}>
+          <button
+            type="button"
+            className={variant === 'danger' ? 'mosaic-button-danger' : 'mosaic-button'}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </button>
         </div>
