@@ -11,6 +11,7 @@ use crate::core::cluster_manager::ClusterRuntimeRegistry;
 use crate::core::download_manager::DownloadRegistry;
 use crate::core::inference_manager::InferenceRegistry;
 use crate::core::ollama_manager::{self, OllamaStatus};
+use crate::core::ollama_supervisor::OllamaSupervisor;
 use crate::core::python_analytics_service::{self, AnalyticsHealth};
 use crate::core::settings_store::SettingsStore;
 use crate::core::system_probe::{self, SystemProfile};
@@ -54,13 +55,19 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
+            if let Ok(res_dir) = app.path().resource_dir() {
+                python_analytics_service::set_resource_dir(res_dir);
+            }
             let data_dir = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::temp_dir().join("mosaic"));
             let db_path = data_dir.join("mosaic.db");
             let store = SettingsStore::open(&db_path)?;
-            app.manage(AppState { store });
+            app.manage(AppState {
+                store,
+                ollama: OllamaSupervisor::default(),
+            });
             app.manage(RuntimeState {
                 downloads: DownloadRegistry::default(),
                 inference: InferenceRegistry::default(),
@@ -76,14 +83,19 @@ pub fn run() {
             commands::update_setting,
             commands::get_diagnostics,
             commands::list_catalog_with_fit,
+            commands::refresh_model_catalog,
+            commands::analyze_hardware_insights,
             commands::runtime::pull_model,
             commands::runtime::cancel_pull,
             commands::runtime::list_installed_models,
+            commands::runtime::show_model_details,
             commands::runtime::delete_installed_model,
             commands::runtime::start_chat_stream,
             commands::runtime::stop_chat_stream,
             commands::runtime::unload_model,
             commands::runtime::configure_ollama_storage,
+            commands::runtime::start_managed_ollama,
+            commands::runtime::stop_managed_ollama,
             commands::runtime::prepare_safe_eject,
             commands::runtime::preview_internal_migration,
             commands::runtime::execute_internal_migration,
@@ -96,6 +108,7 @@ pub fn run() {
             commands::cluster::stop_cluster_runtime,
             commands::benchmarks::run_model_benchmark,
             commands::benchmarks::list_benchmark_reports,
+            commands::benchmarks::analyze_benchmark_performance,
             commands::benchmarks::export_benchmark_report,
         ])
         .run(tauri::generate_context!())
