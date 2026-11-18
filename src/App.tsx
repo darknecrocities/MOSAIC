@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { PullProgressBanner } from './components/common/PullProgressBanner';
 import { AppShell } from './components/layout/AppShell';
 import { OnboardingGate } from './components/onboarding/OnboardingGate';
@@ -12,6 +13,8 @@ import { SettingsScreen } from './screens/SettingsScreen';
 
 export function App() {
   const rt = useMosaicRuntime();
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+
   const showOnboarding =
     (!rt.state || !rt.state.library_connected) &&
     rt.route !== 'hardware' &&
@@ -53,10 +56,20 @@ export function App() {
           items={rt.catalog}
           loading={rt.catalogLoading}
           contextLength={rt.contextLength}
+          executionProfile={rt.executionProfile}
+          kvCacheType={rt.kvCacheType}
+          lastCatalogRefresh={rt.lastCatalogRefresh}
+          refreshingCatalog={refreshingCatalog}
           libraryConnected={Boolean(rt.state?.library_connected)}
           freeBytes={rt.state?.active_library?.free_bytes ?? 0}
           pullingName={rt.pullProgress && !rt.pullProgress.done ? rt.pullProgress.model : null}
           onChangeContextLength={rt.setContextLength}
+          onChangeExecutionProfile={rt.setExecutionProfile}
+          onChangeKvCacheType={rt.setKvCacheType}
+          onRefreshCatalog={() => {
+            setRefreshingCatalog(true);
+            void rt.handleRefreshCatalog().finally(() => setRefreshingCatalog(false));
+          }}
           onPullModel={(name) => void rt.handlePullModel(name)}
         />
       )}
@@ -72,11 +85,11 @@ export function App() {
             rt.setSelectedModel(name);
             rt.setRoute('run');
           }}
-          onRunBenchmark={(model) =>
+          onRunBenchmark={(model, contextLength, repetitions) =>
             rt.handleRunBenchmark({
               model,
-              contextLength: rt.contextLength,
-              repetitions: 2,
+              contextLength: contextLength ?? rt.contextLength,
+              repetitions: repetitions ?? 2,
               executionProfile: rt.executionProfile,
               kvCacheType: rt.kvCacheType,
             })
@@ -127,6 +140,8 @@ export function App() {
           onSelectVolume={(id) => void rt.handleSelectVolume(id)}
           onInspectHardware={() => rt.setRoute('hardware')}
           onConfigureOllamaStorage={rt.handleConfigureOllamaStorage}
+          onStartManagedOllama={rt.handleStartManagedOllama}
+          onStopManagedOllama={rt.handleStopManagedOllama}
           onSafeEject={rt.handleSafeEject}
         />
       )}
