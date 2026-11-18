@@ -104,11 +104,12 @@ class NdjsonWorker:
             return None, None
         try:
             req = json.loads(stripped)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
+            msg = exc.msg if isinstance(exc, json.JSONDecodeError) else str(exc)
             return make_envelope(
                 job_id="unknown", kind="error", source="unavailable",
                 confidence="unknown", error_code="INVALID_JSON",
-                error_message=f"Malformed JSON request: {exc.msg}",
+                error_message=f"Malformed JSON request: {msg}",
             ), None
         if not isinstance(req, dict):
             return make_envelope(
@@ -162,26 +163,21 @@ class NdjsonWorker:
             result = handler(params, ctx)
             kind = "pong" if method == "ping" else "result"
             return make_envelope(
-                job_id=job_id,
-                kind=kind,
-                value=result.get("value"),
-                unit=result.get("unit"),
+                job_id=job_id, kind=kind, value=result.get("value"), unit=result.get("unit"),
                 source=result.get("source", "measured"),
                 confidence=result.get("confidence", "high"),
                 limitations=result.get("limitations"),
             )
         except Exception as exc:  # noqa: BLE001
             return make_envelope(
-                job_id=job_id,
-                kind="error",
-                source="unavailable",
-                confidence="unknown",
-                error_code="EXECUTION_ERROR",
-                error_message=str(exc),
+                job_id=job_id, kind="error", source="unavailable", confidence="unknown",
+                error_code="EXECUTION_ERROR", error_message=str(exc),
             )
         finally:
-            with self._lock:
-                self._active_jobs.pop(job_id, None)
+            if method != "ping":
+                with self._lock:
+                    if self._active_jobs.get(job_id) is cancel_event:
+                        self._active_jobs.pop(job_id, None)
 
     def process_line(self, raw_line: str) -> dict[str, Any] | None:
         """Parse and execute a single NDJSON request line synchronously."""
@@ -206,12 +202,19 @@ class NdjsonWorker:
     def serve(self, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
         """Run NDJSON read/write loop with background execution so cancel/ping stay live."""
         write_lock = threading.Lock()
-        job_queue: queue.Queue[
-            tuple[str, str, HandlerFn, dict[str, Any], threading.Event] | None
-        ] = queue.Queue()
+        job_queue: queue.Queue[Any] = queue.Queue()
 
         def emit(envelope: dict[str, Any]) -> None:
-            line_out = json.dumps(envelope) + "\n"
+            try:
+                line_out = json.dumps(envelope, allow_nan=False) + "\n"
+            except (ValueError, TypeError) as exc:
+                fallback = make_envelope(
+                    job_id=str(envelope.get("job_id") or "unknown"),
+                    kind="error", source="unavailable", confidence="unknown",
+                    error_code="EXECUTION_ERROR",
+                    error_message=f"Response serialization failed: {exc}",
+                )
+                line_out = json.dumps(fallback, allow_nan=False) + "\n"
             with write_lock:
                 stdout.write(line_out)
                 stdout.flush()

@@ -135,7 +135,9 @@ def _probe_rocm_smi() -> list[dict[str, Any]]:
             capture_output=True, text=True, timeout=3.0, check=False,
         )
         data = json.loads(proc.stdout) if (proc.returncode == 0 and proc.stdout.strip()) else {}
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(data, dict):
         return []
     gpus: list[dict[str, Any]] = []
     for idx, (_card, info) in enumerate(sorted(data.items())):

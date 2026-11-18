@@ -155,7 +155,7 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     return {
         "value": {
             "model": model,
-            "context_length": int(options.get("num_ctx", context_length)),
+            "context_length": safe_int(options.get("num_ctx"), context_length),
             "repetitions": repetitions,
             "idle_available_bytes": idle_available,
             "peak_ram_used_bytes": peak_used,

@@ -11,7 +11,7 @@ from mosaic_analytics.execution_planner import (
     resolve_kv_cache_type,
 )
 from mosaic_analytics.fit_inputs import is_pos_num, parse_fit_params
-from mosaic_analytics.numeric import safe_int
+from mosaic_analytics.numeric import MAX_SAFE_BYTES, MAX_SAFE_COUNT, safe_int, safe_scaled_int
 from mosaic_analytics.protocol import JobContext
 
 QUANT_BPW: dict[str, float] = {
@@ -29,14 +29,14 @@ def _estimate_weights(model: dict[str, Any]) -> tuple[int | None, list[str], str
     raw_size = model.get("download_size_bytes")
     size_bytes = raw_size if is_pos_num(raw_size) else model.get("estimated_bytes")
     if is_pos_num(size_bytes):
-        return int(float(size_bytes) * 1.03), [], "high"
+        return safe_scaled_int(size_bytes, 1.03, min_value=1), [], "high"
 
     raw_params = model.get("parameter_billions")
     params_b = raw_params if is_pos_num(raw_params) else model.get("params_b")
     quant = str(model.get("quantization") or "Q4_K_M").upper()
     if is_pos_num(params_b):
         bpw = QUANT_BPW.get(quant, 4.85)
-        estimated = int(float(params_b) * 1e9 * (bpw / 8.0) * 1.05)
+        estimated = safe_scaled_int(params_b, 1e9 * (bpw / 8.0) * 1.05, min_value=1)
         notes = [f"Weight memory estimated from {params_b}B params at {quant} ({bpw} bpw)."]
         return estimated, notes, "medium"
 
@@ -51,31 +51,46 @@ def _estimate_kv_cache(
 ) -> tuple[int, list[str]]:
     """Compute KV cache bytes using GQA head dimensions and KV quantization."""
     kv_bpe = KV_BYTES_PER_ELEM.get(str(kv_cache_type or "f16").lower(), 2.0)
-    slots = max(1, safe_int(num_parallel, 1))
-    n_layers, n_kv_heads, head_dim = (
-        model.get("n_layers"), model.get("n_kv_heads"), model.get("head_dim")
-    )
-    if all(
-        isinstance(v, int) and not isinstance(v, bool) and v > 0
-        for v in (n_layers, n_kv_heads, head_dim)
-    ):
-        kv = int(2 * int(n_layers) * int(n_kv_heads) * int(head_dim) * context_length * kv_bpe)
-        return kv * slots, []
+    ctx_len = max(1, safe_int(context_length, 4096, max_value=MAX_SAFE_COUNT))
+    slots = max(1, safe_int(num_parallel, 1, max_value=MAX_SAFE_COUNT))
+    n_layers = safe_int(model.get("n_layers"), 0, max_value=1_000_000)
+    n_kv_heads = safe_int(model.get("n_kv_heads"), 0, max_value=1_000_000)
+    head_dim = safe_int(model.get("head_dim"), 0, max_value=1_000_000)
+    if n_layers > 0 and n_kv_heads > 0 and head_dim > 0:
+        kv_base = 2 * n_layers * n_kv_heads * head_dim * ctx_len
+        return safe_scaled_int(kv_base, kv_bpe * slots, min_value=0), []
 
     raw_p = model.get("parameter_billions")
     p_cand = raw_p if is_pos_num(raw_p) else model.get("params_b")
     params_b = float(p_cand) if is_pos_num(p_cand) else 7.0
-    fallback = int((params_b / 7.0) * (context_length / 4096) * 0.55 * GIB * (kv_bpe / 2.0) * slots)
+    fallback = safe_scaled_int(
+        params_b / 7.0, (ctx_len / 4096) * 0.55 * GIB * (kv_bpe / 2.0) * slots, min_value=0
+    )
     return fallback, ["Architecture KV-head metadata missing; using conservative KV-cache range."]
 
 
 def _estimate_runtime_overhead(backend: str, weight_bytes: int) -> int:
     """Backend-specific compute graph, Metal/CUDA scratch, and runtime buffer overhead."""
     if backend == "unified_metal":
-        return 384 * 1024 * 1024 + int(weight_bytes * 0.08)
+        return min(MAX_SAFE_BYTES, 384 * 1024 * 1024 + safe_scaled_int(weight_bytes, 0.08))
     if backend == "discrete_gpu":
-        return 384 * 1024 * 1024 + int(weight_bytes * 0.10)
-    return 256 * 1024 * 1024 + int(weight_bytes * 0.06)
+        return min(MAX_SAFE_BYTES, 384 * 1024 * 1024 + safe_scaled_int(weight_bytes, 0.10))
+    return min(MAX_SAFE_BYTES, 256 * 1024 * 1024 + safe_scaled_int(weight_bytes, 0.06))
+
+
+def _unknown_assessment(context_length: int, reasons: list[str]) -> dict[str, Any]:
+    return {
+        "value": {
+            "fit_status": "Unknown", "weight_memory_estimate": None,
+            "runtime_overhead_estimate": None, "kv_cache_estimate": None,
+            "total_estimated_bytes": None, "available_budget": None,
+            "context_length": context_length, "requested_context_length": context_length,
+            "expected_backend": "unknown", "performance_estimate": "Not benchmarked yet",
+            "reasons": reasons, "execution_plan": None,
+            "gpu_budget_bytes": None, "cpu_spill_budget_bytes": None,
+        },
+        "unit": "bytes", "source": "estimated", "confidence": "unknown", "limitations": reasons,
+    }
 
 
 def _assess_single_model(
@@ -90,19 +105,7 @@ def _assess_single_model(
 ) -> dict[str, Any]:
     weight_bytes, weight_notes, confidence = _estimate_weights(model)
     if weight_bytes is None:
-        return {
-            "value": {
-                "fit_status": "Unknown", "weight_memory_estimate": None,
-                "runtime_overhead_estimate": None, "kv_cache_estimate": None,
-                "total_estimated_bytes": None, "available_budget": None,
-                "context_length": context_length, "requested_context_length": context_length,
-                "expected_backend": "unknown",
-                "performance_estimate": "Not benchmarked yet", "reasons": weight_notes,
-                "execution_plan": None, "gpu_budget_bytes": None, "cpu_spill_budget_bytes": None,
-            },
-            "unit": "bytes", "source": "estimated",
-            "confidence": "unknown", "limitations": weight_notes,
-        }
+        return _unknown_assessment(context_length, weight_notes)
 
     overhead_bytes = _estimate_runtime_overhead(budget.backend, weight_bytes)
     f16_kv, kv_notes = _estimate_kv_cache(model, context_length, "f16", num_parallel)
@@ -112,7 +115,7 @@ def _assess_single_model(
     )
     kv_bytes, _ = _estimate_kv_cache(model, context_length, resolved_kv, num_parallel)
     limitations = weight_notes + kv_notes
-    n_layers = max(0, safe_int(model.get("n_layers"), 0))
+    n_layers = max(0, safe_int(model.get("n_layers"), 0, max_value=1_000_000))
 
     execution_plan = compute_execution_plan(
         profile=profile, kv_cache_type=resolved_kv, requested_ctx=context_length,
@@ -133,13 +136,13 @@ def _assess_single_model(
         and 0 < execution_plan["num_gpu"] < n_layers
         and total_required <= combined
     )
-    if total_required <= int(avail * 0.85):
+    if total_required <= safe_scaled_int(avail, 0.85):
         fit_status = "Recommended"
         reasons.append(
             f"Estimated runtime demand ({total_required / GIB:.1f} GiB) fits comfortably "
             f"within {avail / GIB:.1f} GiB safe budget."
         )
-    elif total_required <= int(avail * 1.15):
+    elif total_required <= safe_scaled_int(avail, 1.15):
         fit_status = "Borderline"
         reasons.append(
             f"Estimated demand ({total_required / GIB:.1f} GiB) is near your "
@@ -207,12 +210,16 @@ def assess_model_fit_batch(params: dict[str, Any], ctx: JobContext) -> dict[str,
         if ctx.is_cancelled:
             break
         model = entry if isinstance(entry, dict) else {}
-        res = _assess_single_model(
-            model=model, budget=budget, media_kind=media_kind, context_length=ctx_len,
-            profile=profile, requested_kv=req_kv, num_parallel=num_parallel,
-        )
+        model_id = model.get("ollama_name") or model.get("model_id") or model.get("name")
+        try:
+            res = _assess_single_model(
+                model=model, budget=budget, media_kind=media_kind, context_length=ctx_len,
+                profile=profile, requested_kv=req_kv, num_parallel=num_parallel,
+            )
+        except (ValueError, TypeError, OverflowError) as exc:
+            res = _unknown_assessment(ctx_len, [f"Malformed model entry: {exc}"])
         item = dict(res["value"])
-        item["model_id"] = model.get("ollama_name") or model.get("model_id") or model.get("name")
+        item["model_id"] = model_id
         item["source"] = res["source"]
         item["confidence"] = res["confidence"]
         item["limitations"] = res["limitations"]

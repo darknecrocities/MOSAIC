@@ -10,7 +10,7 @@ from mosaic_analytics.execution_planner import (
     normalize_profile,
     resolve_memory_budget,
 )
-from mosaic_analytics.numeric import safe_float, safe_int
+from mosaic_analytics.numeric import MAX_SAFE_BYTES, MAX_SAFE_COUNT, safe_float, safe_int
 
 
 def is_pos_num(val: Any) -> bool:
@@ -41,6 +41,7 @@ def normalize_hardware(params: dict[str, Any]) -> dict[str, Any]:
                 if g.get("vram_total_bytes") is not None
                 else g.get("vram_bytes"),
                 0,
+                max_value=MAX_SAFE_BYTES,
             )
             for g in gpus
             if isinstance(g, dict)
@@ -68,11 +69,15 @@ def parse_fit_params(
     st = storage if isinstance(storage, dict) else {}
     media_kind = str(st.get("media_kind") or params.get("media_kind") or "unknown").upper()
     raw_ctx = params.get("context_length")
-    context_length = 4096 if raw_ctx is None else max(512, safe_int(raw_ctx, 4096))
+    context_length = (
+        4096 if raw_ctx is None else max(512, safe_int(raw_ctx, 4096, max_value=MAX_SAFE_COUNT))
+    )
     raw_res = params.get("safety_reserve_gib")
     reserve_gib = 2.0 if raw_res is None else max(0.0, safe_float(raw_res, 2.0))
     raw_par = params.get("num_parallel")
-    num_parallel = 1 if raw_par is None else max(1, safe_int(raw_par, 1))
+    num_parallel = (
+        1 if raw_par is None else max(1, safe_int(raw_par, 1, max_value=MAX_SAFE_COUNT))
+    )
     budget = resolve_memory_budget(normalize_hardware(params), reserve_gib)
     profile = normalize_profile(params.get("execution_profile"))
     return media_kind, context_length, profile, params.get("kv_cache_type"), num_parallel, budget
