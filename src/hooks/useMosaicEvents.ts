@@ -27,6 +27,15 @@ export function useMosaicEvents({
     let unlistenPull: (() => void) | undefined;
     let unlistenChat: (() => void) | undefined;
 
+    const safeUnlisten = (fn?: () => void) => {
+      if (!fn) return;
+      try {
+        void Promise.resolve(fn()).catch(() => {});
+      } catch {
+        // Ignore teardown when Tauri internals are already disposed.
+      }
+    };
+
     void (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
@@ -39,7 +48,7 @@ export function useMosaicEvents({
           }
         });
         if (disposed) {
-          pullFn();
+          safeUnlisten(pullFn);
           return;
         }
         unlistenPull = pullFn;
@@ -63,7 +72,7 @@ export function useMosaicEvents({
           if (ev.payload.done) setStreaming(false);
         });
         if (disposed) {
-          chatFn();
+          safeUnlisten(chatFn);
           return;
         }
         unlistenChat = chatFn;
@@ -74,8 +83,8 @@ export function useMosaicEvents({
 
     return () => {
       disposed = true;
-      unlistenPull?.();
-      unlistenChat?.();
+      safeUnlisten(unlistenPull);
+      safeUnlisten(unlistenChat);
     };
   }, [isMountedRef, activeSessionIdRef, onPullProgress, onPullDone, setMessages, setStreaming, setNotice]);
 }
