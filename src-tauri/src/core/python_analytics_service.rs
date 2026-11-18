@@ -110,6 +110,9 @@ pub fn locate_python_binary(project_dir: &Path) -> Option<PathBuf> {
             ["python3", "python"]
         };
         for dir in std::env::split_paths(&paths) {
+            if cfg!(windows) && dir.to_string_lossy().contains("WindowsApps") {
+                continue;
+            }
             for name in names {
                 let candidate = dir.join(name);
                 if candidate.is_file() {

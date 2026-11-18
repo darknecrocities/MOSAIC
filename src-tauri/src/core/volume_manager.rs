@@ -216,34 +216,24 @@ pub fn prepare_safe_eject(mount_path: &str, active_ops: bool) -> Result<String, 
 mod tests {
     use super::*;
 
+    fn test_vol(id: &str, writable: bool, free_bytes: u64) -> ExternalVolume {
+        ExternalVolume {
+            volume_identifier: id.into(),
+            label: id.into(),
+            mount_path: format!("/Volumes/{id}"),
+            filesystem: "APFS".into(),
+            protocol: "USB".into(),
+            media_kind: "SSD".into(),
+            total_bytes: 2000,
+            free_bytes,
+            writable,
+            advisory: None,
+        }
+    }
+
     #[test]
     fn find_live_writable_volume_requires_writable_match() {
-        let vols = vec![
-            ExternalVolume {
-                volume_identifier: "RO-1".into(),
-                label: "RO".into(),
-                mount_path: "/Volumes/RO".into(),
-                filesystem: "exFAT".into(),
-                protocol: "USB".into(),
-                media_kind: "SSD".into(),
-                total_bytes: 1000,
-                free_bytes: 500,
-                writable: false,
-                advisory: None,
-            },
-            ExternalVolume {
-                volume_identifier: "RW-1".into(),
-                label: "RW".into(),
-                mount_path: "/Volumes/RW".into(),
-                filesystem: "APFS".into(),
-                protocol: "USB".into(),
-                media_kind: "SSD".into(),
-                total_bytes: 2000,
-                free_bytes: 1500,
-                writable: true,
-                advisory: None,
-            },
-        ];
+        let vols = vec![test_vol("RO-1", false, 500), test_vol("RW-1", true, 1500)];
         assert!(find_live_writable_volume(&vols, "RO-1").is_none());
         assert_eq!(find_live_writable_volume(&vols, "RW-1").unwrap().free_bytes, 1500);
     }

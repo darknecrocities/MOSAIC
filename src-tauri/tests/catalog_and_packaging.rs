@@ -4,7 +4,7 @@ use std::path::Path;
 use mosaic_lib::core::cluster_flags::{scan_gguf_files, validate_gguf_path};
 use mosaic_lib::core::model_catalog;
 use mosaic_lib::core::python_analytics_service::{
-    candidate_python_project_dirs, run_single_job_in_dir, AnalyticsError,
+    candidate_python_project_dirs, locate_python_binary, run_single_job_in_dir, AnalyticsError,
 };
 use mosaic_lib::core::settings_store::SettingsStore;
 use mosaic_lib::core::system_probe::{GpuDeviceInfo, SystemProfile};
@@ -112,13 +112,9 @@ async fn python_service_captures_large_stderr_without_deadlock_and_checks_paths(
     )
     .unwrap();
 
-    let py = Path::new("/usr/bin/python3");
-    let target_py = if py.is_file() {
-        py
-    } else {
-        Path::new("python3")
-    };
-    let err = run_single_job_in_dir(&root, target_py, "ping", serde_json::json!({}), 5)
+    let target_py = locate_python_binary(&root)
+        .unwrap_or_else(|| std::path::PathBuf::from(if cfg!(windows) { "python.exe" } else { "python3" }));
+    let err = run_single_job_in_dir(&root, &target_py, "ping", serde_json::json!({}), 5)
         .await
         .unwrap_err();
     match err {
