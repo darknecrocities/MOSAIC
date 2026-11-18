@@ -134,3 +134,34 @@ def test_nvidia_smi_and_rocm_smi_fallbacks(monkeypatch) -> None:
     amd_res = hardware_analyzer.analyze_hardware({}, _ctx())["value"]["gpu"]
     assert amd_res["devices"][0]["vendor"] == "amd"
     assert amd_res["devices"][0]["vram_free_bytes"] == 22 * 1024**3
+
+
+def test_nvidia_smi_rejects_inf_nan_and_negative_vram(monkeypatch) -> None:
+    monkeypatch.setattr(
+        hardware_analyzer.shutil,
+        "which",
+        lambda name: "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None,
+    )
+    csv_out = (
+        "0, BadInf, inf, 1024\n"
+        "1, BadNeg, -100, -50\n"
+        "2, BadNaN, nan, 512\n"
+        "3, ValidGPU, 8192, 7000\n"
+    )
+    monkeypatch.setattr(
+        hardware_analyzer.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(returncode=0, stdout=csv_out),
+    )
+    gpus = hardware_analyzer._probe_nvidia_smi()
+    assert len(gpus) == 1
+    assert gpus[0]["model"] == "ValidGPU"
+    assert gpus[0]["vram_total_bytes"] == 8192 * 1024 * 1024
+
+
+def test_analyze_hardware_guards_malformed_system_profile() -> None:
+    res = hardware_analyzer.analyze_hardware(
+        {"system_profile": "bad", "rust_ram_available_bytes": "not_an_int"},
+        _ctx(),
+    )["value"]
+    assert res["ram_effective_avail_bytes"] >= 0
