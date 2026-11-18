@@ -5,6 +5,7 @@ import type { ExecutionPlan } from './analytics';
 export interface GpuDeviceInfo {
   vendor: string;
   model: string;
+  name?: string;
   vram_bytes: number | null;
   unified_memory: boolean;
   source: string;
@@ -20,6 +21,7 @@ export interface SystemProfile {
   ram_total_bytes: number;
   ram_available_bytes: number;
   metal_wired_limit_bytes?: number | null;
+  gpu_vram_bytes?: number | null;
   is_unified_memory: boolean;
   gpus: GpuDeviceInfo[];
   gpu_status: string;

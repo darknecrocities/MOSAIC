@@ -59,6 +59,7 @@ export interface ModelShowDetails {
   parameters: string | null;
   template: string | null;
   license: string | null;
+  native_context_length?: number | null;
   details: {
     format: string | null;
     family: string | null;

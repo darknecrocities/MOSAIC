@@ -1,41 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  AppBootstrapState,
-  BenchmarkReportRecord,
-  CatalogModelWithFit,
-  ChatMessage,
-  ExecutionProfile,
-  InstalledModel,
-  KvCacheType,
-  NavRoute,
-  PullProgressEvent,
+  AppBootstrapState, BenchmarkReportRecord, CatalogModelWithFit, ChatMessage,
+  ExecutionProfile, InstalledModel, KvCacheType, NavRoute, PullProgressEvent,
 } from '../types/ipc';
 import { mosaicApi } from '../utils/mosaicApi';
 import { isTauriRuntime, toErrorMessage, triggerFileDownload } from '../utils/tauriClient';
 import { useMosaicEvents } from './useMosaicEvents';
 
 function createSessionId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `session-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `session-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
 export interface ChatSendOptions {
-  numCtx: number;
-  temperature: number;
-  executionProfile: ExecutionProfile;
-  kvCacheType: KvCacheType;
-  numGpu: number | null;
-  keepAlive: string;
+  numCtx: number; temperature: number; executionProfile: ExecutionProfile;
+  kvCacheType: KvCacheType; numGpu: number | null; keepAlive: string;
 }
 
 export interface BenchmarkRunOptions {
-  model: string;
-  contextLength: number;
-  repetitions: number;
-  executionProfile: ExecutionProfile;
-  kvCacheType: KvCacheType;
+  model: string; contextLength: number; repetitions: number;
+  executionProfile: ExecutionProfile; kvCacheType: KvCacheType;
 }
 
 export function useMosaicRuntime() {
@@ -64,10 +49,7 @@ export function useMosaicRuntime() {
   const activeSessionIdRef = useRef<string>(createSessionId());
   const defaultsSyncedRef = useRef(false);
 
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
-  }, []);
+  useEffect(() => { isMountedRef.current = true; return () => { isMountedRef.current = false; }; }, []);
 
   const loadState = useCallback(async () => {
     if (!isTauriRuntime()) {
@@ -142,7 +124,7 @@ export function useMosaicRuntime() {
     setCatalogLoading(true);
     void mosaicApi.listCatalogWithFit(contextLength, executionProfile, kvCacheType)
       .then((items) => { if (!cancelled && isMountedRef.current) setCatalog(items); })
-      .catch(() => {})
+      .catch((err) => { if (!cancelled && isMountedRef.current) setNotice(toErrorMessage(err)); })
       .finally(() => { if (!cancelled && isMountedRef.current) setCatalogLoading(false); });
     return () => { cancelled = true; };
   }, [route, contextLength, executionProfile, kvCacheType]);
@@ -195,19 +177,22 @@ export function useMosaicRuntime() {
     },
     handleDeleteModel: (name: string) => runAction(() => mosaicApi.deleteInstalledModel(name, true), `Deleted ${name}.`),
     handleSendMessage: async (prompt: string, opts: ChatSendOptions) => {
+      const reqSessionId = activeSessionIdRef.current;
       const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: prompt }];
       setMessages(nextMessages);
       setStreaming(true);
       setNotice(null);
       try {
         await mosaicApi.startChatStream({
-          session_id: activeSessionIdRef.current, model: selectedModel, messages: nextMessages,
+          session_id: reqSessionId, model: selectedModel, messages: nextMessages,
           num_ctx: opts.numCtx, temperature: opts.temperature, execution_profile: opts.executionProfile,
           kv_cache_type: opts.kvCacheType === 'auto' ? null : opts.kvCacheType,
           num_gpu: opts.numGpu, keep_alive: opts.keepAlive || null,
         });
       } catch (err) {
-        if (isMountedRef.current) { setStreaming(false); setNotice(toErrorMessage(err)); }
+        if (isMountedRef.current && activeSessionIdRef.current === reqSessionId) {
+          setStreaming(false); setNotice(toErrorMessage(err));
+        }
       }
     },
     handleStopGeneration: () => {
@@ -243,8 +228,12 @@ export function useMosaicRuntime() {
     handleStopManagedOllama: () => runAction(() => mosaicApi.stopManagedOllama(true).then(() => undefined), 'Managed Ollama stopped.'),
     handleSafeEject: () => runAction(() => mosaicApi.prepareSafeEject(), 'Drive is safe to remove.'),
     handleSaveSetting: async (key: string, value: unknown) => {
-      const nextSettings = await mosaicApi.updateSetting(key, value);
-      if (isMountedRef.current) setState((prev) => (prev ? { ...prev, settings: nextSettings } : prev));
+      const next = await mosaicApi.updateSetting(key, value);
+      if (!isMountedRef.current) return;
+      setState((prev) => (prev ? { ...prev, settings: next } : prev));
+      if (key === 'default_context_length') setContextLength(next.default_context_length || 4096);
+      if (key === 'execution_profile') setExecutionProfile((next.execution_profile as ExecutionProfile) || 'auto_adaptive');
+      if (key === 'kv_cache_type') setKvCacheType((next.kv_cache_type as KvCacheType) || 'auto');
     },
   };
 }

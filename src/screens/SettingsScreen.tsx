@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ClusterWorkersSection } from '../components/settings/ClusterWorkersSection';
 import { DiagnosticsLogPanel } from '../components/settings/DiagnosticsLogPanel';
 import type { AppSettingsSnapshot } from '../types/ipc';
@@ -26,31 +26,62 @@ export function SettingsScreen({ settings, onSaveSetting }: SettingsScreenProps)
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
+  const savingRef = useRef(false);
+  const latestSettingsRef = useRef(settings);
+  latestSettingsRef.current = settings;
+
+  const syncFromSettings = useCallback((next: AppSettingsSnapshot) => {
+    setReserve(next.safety_reserve_gib);
+    setEndpoint(next.ollama_endpoint);
+    setProfile(next.execution_profile);
+    setKvType(next.kv_cache_type);
+    setDefaultCtx(next.default_context_length);
+    setMaxModels(next.max_loaded_models);
+    setNumParallel(next.num_parallel);
+    setKeepAlive(next.keep_alive);
+    setNumBatch(next.num_batch != null ? String(next.num_batch) : '');
+    setNumUbatch(next.num_ubatch != null ? String(next.num_ubatch) : '');
+    setNumThread(next.num_thread != null ? String(next.num_thread) : '');
+    setPollMs(next.telemetry_poll_ms);
+    setMgmtMode(next.ollama_management_mode);
+  }, []);
+
+  useEffect(() => {
+    if (!savingRef.current) syncFromSettings(settings);
+  }, [settings, syncFromSettings]);
+
   const handleSave = async () => {
     setSavedNotice(null);
     setErrorNotice(null);
+    const startSettings = latestSettingsRef.current;
+    savingRef.current = true;
     try {
-      const updates: Array<[string, unknown]> = [
-        ['safety_reserve_gib', reserve],
-        ['ollama_endpoint', endpoint],
-        ['execution_profile', profile],
-        ['kv_cache_type', kvType],
-        ['default_context_length', defaultCtx],
-        ['max_loaded_models', maxModels],
-        ['num_parallel', numParallel],
-        ['keep_alive', keepAlive],
-        ['num_batch', numBatch.trim() ? Number(numBatch) : null],
-        ['num_ubatch', numUbatch.trim() ? Number(numUbatch) : null],
-        ['num_thread', numThread.trim() ? Number(numThread) : null],
-        ['telemetry_poll_ms', pollMs],
-        ['ollama_management_mode', mgmtMode],
+      const candidates: Array<[string, unknown, unknown]> = [
+        ['safety_reserve_gib', reserve, startSettings.safety_reserve_gib],
+        ['ollama_endpoint', endpoint, startSettings.ollama_endpoint],
+        ['execution_profile', profile, startSettings.execution_profile],
+        ['kv_cache_type', kvType, startSettings.kv_cache_type],
+        ['default_context_length', defaultCtx, startSettings.default_context_length],
+        ['max_loaded_models', maxModels, startSettings.max_loaded_models],
+        ['num_parallel', numParallel, startSettings.num_parallel],
+        ['keep_alive', keepAlive, startSettings.keep_alive],
+        ['num_batch', numBatch.trim() ? Number(numBatch) : null, startSettings.num_batch],
+        ['num_ubatch', numUbatch.trim() ? Number(numUbatch) : null, startSettings.num_ubatch],
+        ['num_thread', numThread.trim() ? Number(numThread) : null, startSettings.num_thread],
+        ['telemetry_poll_ms', pollMs, startSettings.telemetry_poll_ms],
+        ['ollama_management_mode', mgmtMode, startSettings.ollama_management_mode],
       ];
-      for (const [k, v] of updates) {
-        await onSaveSetting(k, v);
+      for (const [k, nextVal, prevVal] of candidates) {
+        if (nextVal !== prevVal) await onSaveSetting(k, nextVal);
       }
       setSavedNotice('Settings saved locally to SQLite.');
     } catch (err) {
       setErrorNotice(toErrorMessage(err));
+    } finally {
+      savingRef.current = false;
+      if (latestSettingsRef.current !== startSettings) {
+        syncFromSettings(latestSettingsRef.current);
+      }
     }
   };
 

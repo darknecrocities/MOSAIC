@@ -69,4 +69,42 @@ describe('DiscoverModelsScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download Anyway' }));
     expect(onPullModel).toHaveBeenCalledWith('deepseek-r1:70b');
   });
+
+  it('keeps open ModelDetailDrawer synced when catalog items update and portals ConfirmModal to document.body', () => {
+    const props = {
+      items: SAMPLE_CATALOG,
+      loading: false,
+      contextLength: 32768,
+      libraryConnected: true,
+      freeBytes: 500 * 1024 ** 3,
+      pullingName: null,
+      onChangeContextLength: vi.fn(),
+      onPullModel: vi.fn(),
+    };
+
+    const { rerender } = render(<DiscoverModelsScreen {...props} />);
+    fireEvent.click(screen.getAllByRole('button', { name: /View details/i })[0]);
+    expect(screen.getByText('KV Cache (32768 ctx)')).toBeInTheDocument();
+
+    const updated = SAMPLE_CATALOG.map((entry, idx) =>
+      idx === 0 && entry.fit.execution_plan
+        ? {
+            ...entry,
+            fit: {
+              ...entry.fit,
+              context_length: 8192,
+              execution_plan: { ...entry.fit.execution_plan, num_ctx: 8192 },
+            },
+          }
+        : entry
+    );
+    rerender(<DiscoverModelsScreen {...props} items={updated} contextLength={8192} />);
+    expect(screen.getByText('KV Cache (8192 ctx)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close model details' }));
+    fireEvent.click(screen.getAllByRole('button', { name: /View details/i })[1]);
+    fireEvent.click(screen.getByRole('button', { name: /Adaptive Pull/i }));
+    const confirmDialog = screen.getByRole('heading', { name: 'Pull Exceeds Safe Memory Budget' }).closest('.mosaic-modal-backdrop');
+    expect(confirmDialog?.parentElement).toBe(document.body);
+  });
 });

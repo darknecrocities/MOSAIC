@@ -60,10 +60,37 @@ export function ModelShowModal({
                 </div>
               </>
             )}
+            {details.license && (
+              <div className="mosaic-kv">
+                <span className="mosaic-kv-label">License</span>
+                <span>{details.license}</span>
+              </div>
+            )}
+            {(() => {
+              const nativeCtx =
+                details.native_context_length ??
+                (details.model_info
+                  ? Object.entries(details.model_info).find(
+                      ([k, v]) => (k === 'context_length' || k.endsWith('.context_length')) && typeof v === 'number'
+                    )?.[1]
+                  : undefined);
+              return typeof nativeCtx === 'number' ? (
+                <div className="mosaic-kv">
+                  <span className="mosaic-kv-label">Native Context Length</span>
+                  <span className="mosaic-num">{nativeCtx}</span>
+                </div>
+              ) : null;
+            })()}
             {details.capabilities && details.capabilities.length > 0 && (
               <div className="mosaic-kv">
                 <span className="mosaic-kv-label">Capabilities</span>
                 <span>{details.capabilities.join(', ')}</span>
+              </div>
+            )}
+            {details.model_info && Object.keys(details.model_info).length > 0 && (
+              <div>
+                <span className="mosaic-eyebrow">Model Info</span>
+                <pre>{JSON.stringify(details.model_info, null, 2)}</pre>
               </div>
             )}
             {details.parameters && (

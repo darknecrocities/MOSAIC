@@ -34,7 +34,7 @@ describe('ExternalStorageScreen', () => {
       />
     );
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /Migrate Models/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /Migrate Internal Models/i })).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Start Managed Ollama' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Start Managed Ollama' })[1]);
@@ -48,7 +48,7 @@ describe('ExternalStorageScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Eject Safely' }));
     expect(onSafeEject).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /Migrate Models/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Migrate Internal Models/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Copy to External Drive' }));
     await waitFor(() => {
       expect(tauri.callsFor('execute_internal_migration')[0]?.args).toEqual({ confirmed: true });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Lock, Play, RotateCcw, Send, Square } from 'lucide-react';
 import type {
   ChatMessage,
@@ -17,6 +17,7 @@ interface RunModelScreenProps {
   streaming: boolean;
   messages: ChatMessage[];
   telemetry?: ResourceTelemetry | null;
+  defaultContextLength?: number;
   executionProfile?: ExecutionProfile;
   kvCacheType?: KvCacheType;
   onSelectModel: (name: string) => void;
@@ -42,6 +43,7 @@ export function RunModelScreen({
   streaming,
   messages,
   telemetry,
+  defaultContextLength = 4096,
   executionProfile: initialProfile = 'auto_adaptive',
   kvCacheType: initialKv = 'auto',
   onSelectModel,
@@ -52,11 +54,27 @@ export function RunModelScreen({
   onStartManagedOllama,
 }: RunModelScreenProps) {
   const [prompt, setPrompt] = useState('');
-  const [numCtx, setNumCtx] = useState(4096);
+  const [numCtx, setNumCtx] = useState(defaultContextLength);
   const [temperature, setTemperature] = useState(0.2);
   const [executionProfile, setExecutionProfile] = useState<ExecutionProfile>(initialProfile);
   const [kvCacheType, setKvCacheType] = useState<KvCacheType>(initialKv);
   const [numGpuRaw, setNumGpuRaw] = useState('');
+
+  useEffect(() => {
+    setNumCtx(defaultContextLength);
+  }, [defaultContextLength]);
+
+  useEffect(() => {
+    setExecutionProfile(initialProfile);
+  }, [initialProfile]);
+
+  useEffect(() => {
+    setKvCacheType(initialKv);
+  }, [initialKv]);
+
+  const contextOptions = RUN_CONTEXTS.includes(numCtx)
+    ? RUN_CONTEXTS
+    : [...RUN_CONTEXTS, numCtx].sort((a, b) => a - b);
 
   const canRun = libraryConnected && ollamaReachable && Boolean(selectedModel) && !streaming;
 
@@ -202,7 +220,7 @@ export function RunModelScreen({
             value={numCtx}
             onChange={(e) => setNumCtx(Number(e.target.value))}
           >
-            {RUN_CONTEXTS.map((ctx) => (
+            {contextOptions.map((ctx) => (
               <option key={ctx} value={ctx}>Context: {ctx.toLocaleString()}</option>
             ))}
           </select>

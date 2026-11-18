@@ -10,6 +10,8 @@ export function HardwareScreen({ state }: { state: AppBootstrapState }) {
   const [insights, setInsights] = useState<HardwareAnalysisReport | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const gpuVramBytes =
+    system.gpu_vram_bytes ?? system.gpus.find((g) => typeof g.vram_bytes === 'number')?.vram_bytes ?? null;
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
@@ -48,6 +50,28 @@ export function HardwareScreen({ state }: { state: AppBootstrapState }) {
             <span className="mosaic-kv-label">Unified Memory</span>
             <span>{system.is_unified_memory ? 'Yes (CPU & GPU shared)' : 'No'}</span>
           </div>
+          <div className="mosaic-kv">
+            <span className="mosaic-kv-label">Accelerator</span>
+            <span>{system.gpu_status}</span>
+          </div>
+          {gpuVramBytes != null && (
+            <div className="mosaic-kv">
+              <span className="mosaic-kv-label">GPU VRAM</span>
+              <span className="mosaic-num">{formatGiB(gpuVramBytes)}</span>
+            </div>
+          )}
+          {system.gpus.map((gpu, idx) => (
+            <div key={`${gpu.vendor}-${gpu.model || gpu.name || idx}-${idx}`} className="mosaic-kv">
+              <span className="mosaic-kv-label">{gpu.vendor} {gpu.name ?? gpu.model}</span>
+              <span className="mosaic-num">
+                {gpu.vram_bytes != null
+                  ? `${formatGiB(gpu.vram_bytes)}${gpu.unified_memory ? ' (Unified)' : ''}`
+                  : gpu.unified_memory
+                    ? 'Unified Memory'
+                    : 'Shared / Unknown'}
+              </span>
+            </div>
+          ))}
           {system.metal_wired_limit_bytes != null && (
             <div className="mosaic-kv">
               <span className="mosaic-kv-label">Metal Wired Limit</span>

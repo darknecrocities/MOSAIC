@@ -6,21 +6,44 @@ import { mosaicApi } from '../../utils/mosaicApi';
 import { toErrorMessage } from '../../utils/tauriClient';
 import { ConfirmModal } from '../common/ConfirmModal';
 
+function validateGgufRelPath(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\') || /^[a-zA-Z]:/.test(trimmed)) {
+    return 'GGUF path must be relative to the external library (no leading slash).';
+  }
+  const segments = trimmed.split(/[/\\]+/).filter((s) => s.length > 0);
+  if (segments.some((s) => s === '.' || s === '..')) {
+    return 'GGUF path cannot contain "." or ".." traversal segments.';
+  }
+  if (segments.some((s) => s.startsWith('.') || s.startsWith('._'))) {
+    return 'GGUF path cannot include hidden or AppleDouble (._) components.';
+  }
+  const fileName = segments[segments.length - 1] ?? '';
+  if (!fileName.toLowerCase().endsWith('.gguf') || fileName.length <= 5) {
+    return 'GGUF path must end with a non-empty .gguf filename (e.g. models/model.gguf).';
+  }
+  return null;
+}
+
 export function ClusterPlanPanel({ plan }: { plan: ClusterPlan }) {
   const [ggufRelPath, setGgufRelPath] = useState('');
   const [confirmLaunch, setConfirmLaunch] = useState(false);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const validGguf = ggufRelPath.trim().toLowerCase().endsWith('.gguf');
+  const ggufWarning = validateGgufRelPath(ggufRelPath);
 
   const handleLaunch = async () => {
     setBusy(true);
     setRuntimeNotice(null);
+    setRuntimeError(false);
     try {
       const msg = await mosaicApi.launchClusterRuntime(ggufRelPath.trim(), plan.runtime_flags, true);
       setRuntimeNotice(msg);
     } catch (err) {
+      setRuntimeError(true);
       setRuntimeNotice(toErrorMessage(err));
     } finally {
       setBusy(false);
@@ -30,10 +53,12 @@ export function ClusterPlanPanel({ plan }: { plan: ClusterPlan }) {
   const handleStop = async () => {
     setBusy(true);
     setRuntimeNotice(null);
+    setRuntimeError(false);
     try {
       const stopped = await mosaicApi.stopClusterRuntime();
       setRuntimeNotice(stopped ? 'Cluster runtime stopped.' : 'No active cluster runtime.');
     } catch (err) {
+      setRuntimeError(true);
       setRuntimeNotice(toErrorMessage(err));
     } finally {
       setBusy(false);
@@ -110,7 +135,7 @@ export function ClusterPlanPanel({ plan }: { plan: ClusterPlan }) {
           <button
             type="button"
             className="mosaic-button"
-            disabled={!validGguf || busy}
+            disabled={!ggufRelPath.trim() || busy}
             onClick={() => setConfirmLaunch(true)}
           >
             <Play size={14} aria-hidden="true" />
@@ -126,7 +151,12 @@ export function ClusterPlanPanel({ plan }: { plan: ClusterPlan }) {
             <span>Stop Cluster Runtime</span>
           </button>
         </div>
-        {runtimeNotice && <p className="mosaic-callout mosaic-callout-info" role="status">{runtimeNotice}</p>}
+        {ggufWarning && <p className="mosaic-callout mosaic-callout-warn" role="alert">{ggufWarning}</p>}
+        {runtimeNotice && (
+          <p className={runtimeError ? 'mosaic-callout mosaic-callout-error' : 'mosaic-callout mosaic-callout-info'} role="status">
+            {runtimeNotice}
+          </p>
+        )}
       </div>
 
       <ConfirmModal

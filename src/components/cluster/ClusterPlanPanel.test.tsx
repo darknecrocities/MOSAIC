@@ -45,4 +45,31 @@ describe('ClusterPlanPanel', () => {
       expect(tauri.callsFor('stop_cluster_runtime')).toHaveLength(1);
     });
   });
+
+  it('shows inline validation warning on invalid paths while still surfacing backend errors through ConfirmModal', async () => {
+    tauri.setHandler('launch_cluster_runtime', () => {
+      throw new Error('InvalidPath: Cluster runtime model path must have a .gguf extension.');
+    });
+
+    render(<ClusterPlanPanel plan={SAMPLE_CLUSTER_PLAN} />);
+    const pathInput = screen.getByLabelText(/GGUF relative path/i);
+    const launchBtn = screen.getByRole('button', { name: /Launch Cluster Runtime/i });
+
+    for (const invalid of ['../escape.gguf', '._hidden.gguf', '.gguf', '/etc/escape.gguf']) {
+      fireEvent.change(pathInput, { target: { value: invalid } });
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(launchBtn).toBeEnabled();
+    }
+
+    fireEvent.change(pathInput, { target: { value: 'models/bad.bin' } });
+    expect(screen.getByRole('alert')).toHaveTextContent(/\.gguf/i);
+    expect(launchBtn).toBeEnabled();
+
+    fireEvent.click(launchBtn);
+    fireEvent.click(screen.getByRole('button', { name: 'Launch Runtime' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(/InvalidPath: .*\.gguf/i);
+    });
+  });
 });

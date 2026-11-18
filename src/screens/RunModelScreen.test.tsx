@@ -92,4 +92,50 @@ describe('RunModelScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     expect(onStopGeneration).toHaveBeenCalledTimes(1);
   });
+
+  it('syncs defaultContextLength, executionProfile, and kvCacheType when props update after mount', () => {
+    const { rerender } = render(
+      <RunModelScreen
+        models={SAMPLE_MODELS}
+        selectedModel={SAMPLE_MODELS[0].name}
+        libraryConnected={true}
+        ollamaReachable={true}
+        streaming={false}
+        messages={[]}
+        defaultContextLength={8192}
+        executionProfile="balanced"
+        kvCacheType="q8_0"
+        onSelectModel={vi.fn()}
+        onSendMessage={vi.fn()}
+        onStopGeneration={vi.fn()}
+        onUnloadModel={vi.fn()}
+      />
+    );
+
+    expect((screen.getByLabelText('Context length') as HTMLSelectElement).value).toBe('8192');
+    expect((screen.getByLabelText('Execution profile') as HTMLSelectElement).value).toBe('balanced');
+    expect((screen.getByLabelText('KV cache') as HTMLSelectElement).value).toBe('q8_0');
+
+    rerender(
+      <RunModelScreen
+        models={SAMPLE_MODELS}
+        selectedModel={SAMPLE_MODELS[0].name}
+        libraryConnected={true}
+        ollamaReachable={true}
+        streaming={false}
+        messages={[]}
+        defaultContextLength={16384}
+        executionProfile="constrained_memory"
+        kvCacheType="q4_0"
+        onSelectModel={vi.fn()}
+        onSendMessage={vi.fn()}
+        onStopGeneration={vi.fn()}
+        onUnloadModel={vi.fn()}
+      />
+    );
+
+    expect((screen.getByLabelText('Context length') as HTMLSelectElement).value).toBe('16384');
+    expect((screen.getByLabelText('Execution profile') as HTMLSelectElement).value).toBe('constrained_memory');
+    expect((screen.getByLabelText('KV cache') as HTMLSelectElement).value).toBe('q4_0');
+  });
 });
