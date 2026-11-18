@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
 
 from mosaic_analytics import PROTOCOL_VERSION
@@ -135,3 +136,59 @@ def test_build_worker_estimate_fit_batch_roundtrip(apple_16gb, qwen3_30b_iq2) ->
     assert bad is not None
     assert bad["kind"] == "error"
     assert bad["payload"]["error"]["code"] == "EXECUTION_ERROR"
+
+
+def test_serve_live_pipe_cancel_interrupts_active_batch(apple_16gb, qwen3_30b_iq2) -> None:
+    worker = build_worker()
+    started = threading.Event()
+    orig_batch = worker._handlers["estimate_fit_batch"]
+
+    def wrapped_batch(params: dict, ctx: JobContext) -> dict:
+        started.set()
+        ctx.cancel_event.wait(timeout=2.0)
+        return orig_batch(params, ctx)
+
+    worker.register("estimate_fit_batch", wrapped_batch)
+    r_fd, w_fd = os.pipe()
+    out = io.StringIO()
+    r_stream = os.fdopen(r_fd, "r", encoding="utf-8")
+    w_stream = os.fdopen(w_fd, "w", encoding="utf-8")
+
+    serve_thread = threading.Thread(target=worker.serve, args=(r_stream, out))
+    serve_thread.start()
+
+    w_stream.write(
+        json.dumps(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "job_id": "batch-live",
+                "method": "estimate_fit_batch",
+                "params": {"system_profile": apple_16gb, "models": [qwen3_30b_iq2] * 3},
+            }
+        )
+        + "\n"
+    )
+    w_stream.flush()
+    assert started.wait(timeout=2.0)
+
+    w_stream.write(
+        json.dumps(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "job_id": "cancel-live",
+                "method": "cancel",
+                "params": {"target_job_id": "batch-live"},
+            }
+        )
+        + "\n"
+    )
+    w_stream.flush()
+    w_stream.close()
+    serve_thread.join(timeout=2.0)
+    r_stream.close()
+
+    envelopes = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    by_id = {env["job_id"]: env for env in envelopes}
+    assert by_id["cancel-live"]["payload"]["value"]["cancelled"] is True
+    assert by_id["batch-live"]["payload"]["value"]["cancelled"] is True
+    assert by_id["batch-live"]["payload"]["value"]["assessments"] == []

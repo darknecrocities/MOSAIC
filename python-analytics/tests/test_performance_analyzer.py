@@ -75,3 +75,27 @@ def test_report_detects_kv_pressure_partial_offload_and_prompt_latency() -> None
         "kv_cache_pressure",
     }.issubset(cats)
     assert len(resp["value"]["recommendations"]) >= 3
+
+
+def test_analyze_performance_guards_non_numeric_and_malformed_inputs() -> None:
+    resp = analyze_performance(
+        {
+            "fit": "bad",
+            "storage": "bad",
+            "system_profile": {"ram_total_bytes": "bad"},
+            "execution_plan": {"offload_ratio": True, "num_ctx": "bad"},
+            "report": {
+                "cold_load_ms": "not_a_float",
+                "warm_load_ms": {"median": "oops"},
+                "ttft_ms": float("inf"),
+                "generation_tok_per_sec": True,
+                "peak_ram_used_bytes": "bad",
+                "context_length": "bad",
+            },
+        },
+        _ctx("perf-bad"),
+    )
+    val = resp["value"]
+    assert val["summary"] == "No major hardware bottlenecks detected."
+    assert val["efficiency_ratios"]["cold_to_warm_load_ratio"] is None
+    assert val["efficiency_ratios"]["offload_ratio"] is None

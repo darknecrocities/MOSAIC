@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import platform
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ from typing import Any
 
 import psutil
 
+from mosaic_analytics.numeric import safe_int
 from mosaic_analytics.protocol import JobContext
 
 MIB = 1024 * 1024
@@ -102,12 +104,22 @@ def _probe_nvidia_smi() -> list[dict[str, Any]]:
         if len(parts) < 4:
             continue
         try:
+            idx = int(parts[0])
+            total_mib = float(parts[2])
+            free_mib = float(parts[3])
+            if not (
+                math.isfinite(total_mib)
+                and math.isfinite(free_mib)
+                and total_mib > 0
+                and free_mib >= 0
+            ):
+                continue
             gpus.append({
-                "index": int(parts[0]), "vendor": "nvidia", "model": parts[1],
-                "vram_total_bytes": int(float(parts[2])) * MIB,
-                "vram_free_bytes": int(float(parts[3])) * MIB, "source": "measured",
+                "index": idx, "vendor": "nvidia", "model": parts[1],
+                "vram_total_bytes": int(total_mib) * MIB,
+                "vram_free_bytes": int(free_mib) * MIB, "source": "measured",
             })
-        except ValueError:
+        except (ValueError, OverflowError):
             continue
     return gpus
 
@@ -123,16 +135,24 @@ def _probe_rocm_smi() -> list[dict[str, Any]]:
             capture_output=True, text=True, timeout=3.0, check=False,
         )
         data = json.loads(proc.stdout) if (proc.returncode == 0 and proc.stdout.strip()) else {}
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(data, dict):
         return []
     gpus: list[dict[str, Any]] = []
     for idx, (_card, info) in enumerate(sorted(data.items())):
         if not isinstance(info, dict):
             continue
         try:
-            total_b = int(info.get("VRAM Total Memory (B)") or 0)
-            used_b = int(info.get("VRAM Total Used Memory (B)") or 0)
-        except (TypeError, ValueError):
+            raw_total = info.get("VRAM Total Memory (B)") or 0
+            raw_used = info.get("VRAM Total Used Memory (B)") or 0
+            if (isinstance(raw_total, float) and not math.isfinite(raw_total)) or (
+                isinstance(raw_used, float) and not math.isfinite(raw_used)
+            ):
+                continue
+            total_b = int(raw_total)
+            used_b = int(raw_used)
+        except (TypeError, ValueError, OverflowError):
             continue
         if total_b <= 0:
             continue
@@ -151,10 +171,12 @@ def analyze_hardware(params: dict[str, Any], _ctx: JobContext) -> dict[str, Any]
     is_unified, chip_hint = _detect_apple_silicon()
     limitations: list[str] = []
 
-    sys_profile = params.get("system_profile") or {}
-    rust_avail = int(
-        sys_profile.get("ram_available_bytes") or params.get("rust_ram_available_bytes") or 0
-    )
+    raw_profile = params.get("system_profile")
+    sys_profile = raw_profile if isinstance(raw_profile, dict) else {}
+    raw_rust_avail = sys_profile.get("ram_available_bytes")
+    if raw_rust_avail is None:
+        raw_rust_avail = params.get("rust_ram_available_bytes")
+    rust_avail = max(0, safe_int(raw_rust_avail, 0))
     ram_effective_avail = min(int(vm.total), max(rust_avail, int(vm.available)))
     metal_limit_bytes, metal_limit_source = (
         _probe_metal_wired_limit_bytes(int(vm.total)) if is_unified else (None, None)

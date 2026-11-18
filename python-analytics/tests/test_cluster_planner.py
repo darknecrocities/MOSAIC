@@ -154,3 +154,96 @@ def test_discrete_gpu_moe_exceeding_vram_emits_exps_cpu(qwen3_30b_q4) -> None:
     assert val["strategy"] == "single_node_moe_offload"
     assert val["feasible"] is True
     assert "exps=CPU" in val["runtime_flags"]
+
+
+def test_unified_memory_16gb_within_total_ram_and_metal_cap_full_fit(qwen3_30b_iq2) -> None:
+    val = plan_cluster(
+        {
+            "model": qwen3_30b_iq2,
+            "local_node": {
+                "name": "M3",
+                "is_unified_memory": True,
+                "ram_total_bytes": 16 * GIB,
+                "ram_available_bytes": 13 * GIB,
+            },
+            "context_length": 16384,
+            "kv_cache_type": "f16",
+            "safety_reserve_gib": 2.0,
+        },
+        _ctx(),
+    )["value"]
+    assert val["strategy"] == "single_node_full_fit"
+    assert val["feasible"] is True
+    assert val["tier3_disk_mmap_bytes"] == 0
+    assert val["runtime_flags"] == ["-ngl", "999"]
+
+
+def test_unified_memory_24gb_30b_moe_conserves_full_ram_budget(qwen3_30b_q4) -> None:
+    val = plan_cluster(
+        {
+            "model": qwen3_30b_q4,
+            "local_node": {
+                "name": "M3-24G",
+                "is_unified_memory": True,
+                "ram_total_bytes": 24 * GIB,
+                "ram_effective_avail_bytes": 21 * GIB,
+                "metal_wired_limit_bytes": int(16.8 * GIB),
+            },
+            "context_length": 4096,
+            "safety_reserve_gib": 2.0,
+        },
+        _ctx(),
+    )["value"]
+    assert val["strategy"] == "single_node_moe_offload"
+    assert val["feasible"] is True
+    assert val["tier3_disk_mmap_bytes"] == 0
+    assert val["tier1_gpu_bytes"] + val["tier2_ram_bytes"] == val["total_demand_bytes"]
+
+
+def test_zero_valid_and_malformed_workers_fall_back_to_single_node(qwen3_30b_q4) -> None:
+    val = plan_cluster(
+        {
+            "model": qwen3_30b_q4,
+            "local_node": {
+                "name": "M3",
+                "is_unified_memory": True,
+                "ram_total_bytes": 16 * GIB,
+                "ram_available_bytes": 10 * GIB,
+            },
+            "workers": [
+                "10.0.0.2:50052",
+                {"name": "no-host", "ram_available_bytes": 32 * GIB},
+                {"host": "10.0.0.2", "port": -1, "ram_available_bytes": 32 * GIB},
+                {"host": "10.0.0.2", "port": "bad", "ram_available_bytes": 32 * GIB},
+                {"host": "10.0.0.2", "port": 70000, "ram_available_bytes": 32 * GIB},
+                {"host": "10.0.0.2", "port": 50052, "ram_available_bytes": 0},
+            ],
+        },
+        _ctx(),
+    )["value"]
+    assert val["strategy"] != "multi_node_rpc"
+    assert len(val["runtime_flags"]) > 0
+
+
+def test_discrete_24gb_vram_16gb_ram_30b_moe_fits_fully_in_vram(qwen3_30b_q4) -> None:
+    val = plan_cluster(
+        {
+            "model": qwen3_30b_q4,
+            "local_node": {
+                "name": "Win-24GB",
+                "is_unified_memory": False,
+                "vram_bytes": 24 * GIB,
+                "ram_available_bytes": 16 * GIB,
+                "ram_total_bytes": 16 * GIB,
+            },
+            "context_length": 4096,
+            "safety_reserve_gib": 2.0,
+        },
+        _ctx(),
+    )["value"]
+    assert val["strategy"] == "single_node_full_fit"
+    assert val["feasible"] is True
+    assert val["tier1_gpu_bytes"] == val["total_demand_bytes"]
+    assert val["tier2_ram_bytes"] == 0
+    assert val["tier3_disk_mmap_bytes"] == 0
+    assert val["runtime_flags"] == ["-ngl", "999"]

@@ -4,24 +4,25 @@ from __future__ import annotations
 
 from typing import Any
 
+from mosaic_analytics.numeric import safe_float, safe_int, safe_optional_float
 from mosaic_analytics.protocol import JobContext
 
 
 def _metric_median(metric: Any) -> float | None:
-    if isinstance(metric, dict) and isinstance(metric.get("median"), int | float):
-        return float(metric["median"])
-    if isinstance(metric, int | float):
-        return float(metric)
-    return None
+    if isinstance(metric, dict):
+        return safe_optional_float(metric.get("median"))
+    return safe_optional_float(metric)
 
 
 def analyze_performance(params: dict[str, Any], _ctx: JobContext) -> dict[str, Any]:
     """Identify memory, offload, KV-cache, prompt-eval, and storage bottlenecks."""
-    fit = params.get("fit") or {}
-    storage = params.get("storage") or {}
+    fit = params.get("fit") if isinstance(params.get("fit"), dict) else {}
+    storage = params.get("storage") if isinstance(params.get("storage"), dict) else {}
     report = params.get("report")
-    hardware = params.get("system_profile") or params.get("hardware") or {}
-    execution_plan = params.get("execution_plan") or fit.get("execution_plan") or {}
+    raw_hw = params.get("system_profile") or params.get("hardware")
+    hardware = raw_hw if isinstance(raw_hw, dict) else {}
+    raw_plan = params.get("execution_plan") or fit.get("execution_plan")
+    execution_plan = raw_plan if isinstance(raw_plan, dict) else {}
 
     bottlenecks: list[dict[str, str]] = []
     recommendations: list[str] = []
@@ -61,23 +62,21 @@ def analyze_performance(params: dict[str, Any], _ctx: JobContext) -> dict[str, A
 
     efficiency_ratios: dict[str, float | None] = {}
     if isinstance(report, dict) and report:
-        cold_ms = float(report.get("cold_load_ms") or 0.0)
+        cold_ms = safe_float(report.get("cold_load_ms"), 0.0)
         warm_median = _metric_median(report.get("warm_load_ms"))
         ttft_median = _metric_median(report.get("ttft_ms"))
         tps_median = _metric_median(report.get("generation_tok_per_sec"))
-        peak_ram = float(report.get("peak_ram_used_bytes") or 0.0)
-        ram_total = float(
-            hardware.get("ram_total_bytes") or hardware.get("total_bytes") or 0.0
-        )
+        peak_ram = safe_float(report.get("peak_ram_used_bytes"), 0.0)
+        raw_ram_total = hardware.get("ram_total_bytes")
+        if raw_ram_total is None:
+            raw_ram_total = hardware.get("total_bytes")
+        ram_total = safe_float(raw_ram_total, 0.0)
 
         cold_warm_ratio = (
             round(cold_ms / warm_median, 2) if warm_median and warm_median > 0 else None
         )
         mem_util = round(peak_ram / ram_total, 3) if ram_total > 0 and peak_ram > 0 else None
-        offload_ratio_raw = execution_plan.get("offload_ratio")
-        offload_ratio = (
-            float(offload_ratio_raw) if isinstance(offload_ratio_raw, int | float) else None
-        )
+        offload_ratio = safe_optional_float(execution_plan.get("offload_ratio"))
 
         efficiency_ratios = {
             "cold_to_warm_load_ratio": cold_warm_ratio,
@@ -132,7 +131,10 @@ def analyze_performance(params: dict[str, Any], _ctx: JobContext) -> dict[str, A
         kv_type = str(
             execution_plan.get("kv_cache_type") or params.get("kv_cache_type") or "f16"
         ).lower()
-        ctx_len = int(report.get("context_length") or execution_plan.get("num_ctx") or 4096)
+        raw_ctx = report.get("context_length")
+        if raw_ctx is None:
+            raw_ctx = execution_plan.get("num_ctx")
+        ctx_len = safe_int(raw_ctx, 4096)
         if kv_type == "f16" and ((mem_util is not None and mem_util > 0.70) or ctx_len >= 8192):
             bottlenecks.append(
                 {
