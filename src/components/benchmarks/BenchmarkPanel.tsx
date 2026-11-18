@@ -115,11 +115,17 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
                     ))}
                     {analysis.bottlenecks.length > 0 && (
                       <ul className="mosaic-list">
-                        {analysis.bottlenecks.map((b, idx) => (
-                          <li key={idx} className="mosaic-subtitle">
-                            {String(b.component ?? b.type ?? 'bottleneck')}: {String(b.detail ?? b.message ?? JSON.stringify(b))}
-                          </li>
-                        ))}
+                        {analysis.bottlenecks.map((b, idx) => {
+                          const label = b.category ?? b.component ?? b.type ?? 'bottleneck';
+                          const severity = b.severity ? ` (${String(b.severity)})` : '';
+                          const detail =
+                            b.explanation ?? b.detail ?? b.summary ?? b.message ?? JSON.stringify(b);
+                          return (
+                            <li key={idx} className="mosaic-subtitle">
+                              {String(label)}{severity}: {String(detail)}
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                     {recommendations.length > 0 && (

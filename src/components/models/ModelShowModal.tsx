@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import type { ModelShowDetails } from '../../types/ipc';
 
@@ -20,7 +21,7 @@ export function ModelShowModal({
 }: ModelShowModalProps) {
   if (!open) return null;
 
-  return (
+  const modal = (
     <div
       className="mosaic-modal-backdrop"
       role="dialog"
@@ -116,4 +117,6 @@ export function ModelShowModal({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : modal;
 }

@@ -100,20 +100,20 @@ export const SAMPLE_BOOTSTRAP: AppBootstrapState = {
 export const SAMPLE_CATALOG: CatalogModelWithFit[] = [
   {
     model: {
-      ollama_name: 'hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS',
+      ollama_name: 'hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS',
       display_name: 'Qwen3 30B-A3B MoE (IQ2_XS)',
-      provider: 'Qwen',
+      provider: 'Alibaba / Bartowski',
       parameter_billions: 30.5,
       active_parameter_billions: 3.3,
       is_moe: true,
       quantization: 'IQ2_XS',
-      download_size_bytes: 10_200_000_000,
+      download_size_bytes: 9_140_316_832,
       n_layers: 48,
       n_kv_heads: 4,
       head_dim: 128,
       default_context: 32768,
       license_name: 'Apache-2.0',
-      license_url: 'https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF',
+      license_url: 'https://huggingface.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF',
       summary: '30B MoE with 3.3B active parameters per token.',
     },
     fit: {
@@ -182,8 +182,8 @@ export const SAMPLE_CATALOG: CatalogModelWithFit[] = [
 
 export const SAMPLE_MODELS: InstalledModel[] = [
   {
-    name: 'hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS',
-    size_bytes: 10_200_000_000,
+    name: 'hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS',
+    size_bytes: 9_140_316_832,
     digest: 'sha256:abcdef1234567890',
     modified_at: '2026-11-18T09:00:00Z',
     family: 'qwen3moe',
@@ -195,7 +195,7 @@ export const SAMPLE_MODELS: InstalledModel[] = [
 export const SAMPLE_REPORTS: BenchmarkReportRecord[] = [
   {
     id: 'rep-1',
-    model_name: 'hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS',
+    model_name: 'hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS',
     context_length: 4096,
     storage_media_kind: 'HDD',
     cold_load_ms: 42500,
@@ -235,7 +235,7 @@ export const SAMPLE_WORKERS: ClusterWorker[] = [
 ];
 
 export const SAMPLE_SHOW_DETAILS: ModelShowDetails = {
-  model: 'hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS',
+  model: 'hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS',
   modelfile: 'FROM /Volumes/One Touch/MOSAIC/ollama-models/blobs/sha256-abc',
   parameters: 'num_ctx 32768\ntemperature 0.6',
   template: '{{ .Prompt }}',
