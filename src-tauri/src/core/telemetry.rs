@@ -4,6 +4,7 @@ use sysinfo::System;
 use uuid::Uuid;
 
 use crate::core::settings_store::{SettingsStore, StoreError};
+use crate::core::system_probe;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticEntry {
@@ -29,11 +30,8 @@ pub fn sample_resources() -> ResourceTelemetry {
     sys.refresh_cpu_usage();
 
     let total = sys.total_memory();
-    let used = sys.used_memory();
-    let available = match sys.available_memory() {
-        0 => total.saturating_sub(used),
-        avail => avail,
-    };
+    let available = system_probe::resolve_available_ram_bytes(&sys, total);
+    let used = total.saturating_sub(available);
 
     ResourceTelemetry {
         cpu_usage_percent: (sys.global_cpu_usage() * 10.0).round() / 10.0,

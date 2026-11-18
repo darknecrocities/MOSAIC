@@ -28,6 +28,12 @@ pub fn default_internal_models_dir() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".ollama").join("models"))
 }
 
+fn should_skip_entry(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.starts_with("._") || name == ".DS_Store")
+}
+
 fn dir_stats(root: &Path, sub: &str) -> (usize, u64) {
     let target = root.join(sub);
     if !target.is_dir() {
@@ -42,6 +48,9 @@ fn dir_stats(root: &Path, sub: &str) -> (usize, u64) {
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            if should_skip_entry(&path) {
+                continue;
+            }
             if path.is_dir() {
                 stack.push(path);
             } else if let Ok(meta) = entry.metadata() {
@@ -123,6 +132,9 @@ pub fn copy_internal_models(
             let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
             for entry in entries.flatten() {
                 let path = entry.path();
+                if should_skip_entry(&path) {
+                    continue;
+                }
                 if path.is_dir() {
                     stack.push(path);
                     continue;
