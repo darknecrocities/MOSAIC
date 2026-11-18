@@ -1,4 +1,5 @@
 pub mod benchmark_store;
+pub mod cluster_flags;
 pub mod cluster_manager;
 pub mod download_manager;
 pub mod inference_manager;
@@ -6,8 +7,11 @@ pub mod migration;
 pub mod model_catalog;
 pub mod model_library;
 pub mod ollama_manager;
+pub mod ollama_supervisor;
 pub mod python_analytics_service;
+pub mod settings_policy;
 pub mod settings_store;
 pub mod system_probe;
 pub mod telemetry;
 pub mod volume_manager;
+pub mod volume_parsers;
