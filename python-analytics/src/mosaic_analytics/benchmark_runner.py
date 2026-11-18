@@ -1,4 +1,4 @@
-"""Controlled, reproducible Ollama benchmark runner."""
+"""Controlled, reproducible Ollama benchmark runner with adaptive runtime options."""
 
 from __future__ import annotations
 
@@ -13,6 +13,17 @@ import psutil
 from mosaic_analytics.protocol import JobContext
 
 FIXED_PROMPT = "Explain in two concise sentences why local model memory depends on quantization."
+ALLOWED_OPTION_KEYS = (
+    "num_gpu",
+    "num_batch",
+    "num_ubatch",
+    "num_thread",
+    "use_mmap",
+    "use_mlock",
+    "num_ctx",
+    "temperature",
+    "num_predict",
+)
 
 
 def _validate_loopback(endpoint: str) -> str:
@@ -42,6 +53,35 @@ def _summarize(values: list[float]) -> dict[str, float]:
     }
 
 
+def _resolve_cold_timeout_s(params: dict[str, Any]) -> float:
+    explicit = params.get("cold_load_timeout_s")
+    if isinstance(explicit, int | float) and explicit > 0:
+        return max(30.0, float(explicit))
+
+    size_bytes = float(params.get("model_size_bytes") or 0)
+    if size_bytes <= 0:
+        return 180.0
+    media_kind = str(params.get("media_kind") or "unknown").upper()
+    rate_bps = 250 * 1024 * 1024 if media_kind in {"SSD", "NVME"} else 60 * 1024 * 1024
+    estimated = (size_bytes / rate_bps) * 1.5 + 60.0
+    return max(180.0, min(900.0, round(estimated, 1)))
+
+
+def _build_options(params: dict[str, Any], context_length: int) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "num_ctx": context_length,
+        "temperature": 0.0,
+        "num_predict": 64,
+    }
+    raw_opts = params.get("options") or params.get("execution_plan") or {}
+    if isinstance(raw_opts, dict):
+        for key in ALLOWED_OPTION_KEYS:
+            val = raw_opts.get(key)
+            if val is not None:
+                options[key] = val
+    return options
+
+
 def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     """Execute cold-load and repeated warm-load trials against Ollama."""
     endpoint = _validate_loopback(str(params.get("endpoint") or "http://127.0.0.1:11434"))
@@ -52,14 +92,15 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     repetitions = max(2, min(10, int(params.get("repetitions") or 3)))
     context_length = max(512, int(params.get("context_length") or 4096))
     prompt = str(params.get("prompt") or FIXED_PROMPT)
-    cold_timeout_s = float(params.get("cold_load_timeout_s") or 180.0)
-    warm_timeout_s = float(params.get("warm_load_timeout_s") or 120.0)
+    cold_timeout_s = _resolve_cold_timeout_s(params)
+    warm_timeout_s = max(30.0, float(params.get("warm_load_timeout_s") or 120.0))
+    options = _build_options(params, context_length)
+    keep_alive = params.get("keep_alive")
 
     idle_vm = psutil.virtual_memory()
     idle_available = int(idle_vm.available)
     peak_used = int(idle_vm.used)
 
-    # Unload before cold-load measurement
     try:
         _post_json(f"{endpoint}/api/generate", {"model": model, "keep_alive": 0}, timeout_s=10.0)
     except Exception:  # noqa: BLE001
@@ -80,14 +121,18 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
                 "limitations": ["Benchmark cancelled before completion."],
             }
 
+        body: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": options,
+        }
+        if keep_alive is not None:
+            body["keep_alive"] = keep_alive
+
         res = _post_json(
             f"{endpoint}/api/generate",
-            {
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_ctx": context_length, "temperature": 0.0, "num_predict": 64},
-            },
+            body,
             timeout_s=cold_timeout_s if idx == 0 else warm_timeout_s,
         )
         load_ms = float(res.get("load_duration", 0)) / 1e6
@@ -108,7 +153,7 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     return {
         "value": {
             "model": model,
-            "context_length": context_length,
+            "context_length": int(options.get("num_ctx", context_length)),
             "repetitions": repetitions,
             "idle_available_bytes": idle_available,
             "peak_ram_used_bytes": peak_used,
@@ -116,6 +161,8 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
             "warm_load_ms": _summarize(warm_loads) if warm_loads else None,
             "ttft_ms": _summarize(ttft_samples),
             "generation_tok_per_sec": _summarize(tps_samples),
+            "applied_options": options,
+            "cold_load_timeout_s": cold_timeout_s,
         },
         "unit": "mixed",
         "source": "measured",
