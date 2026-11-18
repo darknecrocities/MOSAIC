@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import threading
 from collections.abc import Callable
@@ -95,66 +96,70 @@ class NdjsonWorker:
             "limitations": [],
         }
 
-    def process_line(self, raw_line: str) -> dict[str, Any] | None:
-        """Parse and execute a single NDJSON request line."""
+    def _parse_or_control(
+        self, raw_line: str
+    ) -> tuple[dict[str, Any] | None, tuple[str, str, HandlerFn, dict[str, Any]] | None]:
         stripped = raw_line.strip()
         if not stripped:
-            return None
-
+            return None, None
         try:
             req = json.loads(stripped)
         except json.JSONDecodeError as exc:
             return make_envelope(
-                job_id="unknown",
-                kind="error",
-                source="unavailable",
-                confidence="unknown",
-                error_code="INVALID_JSON",
+                job_id="unknown", kind="error", source="unavailable",
+                confidence="unknown", error_code="INVALID_JSON",
                 error_message=f"Malformed JSON request: {exc.msg}",
-            )
+            ), None
+        if not isinstance(req, dict):
+            return make_envelope(
+                job_id="unknown", kind="error", source="unavailable",
+                confidence="unknown", error_code="INVALID_JSON",
+                error_message="Request must be a JSON object",
+            ), None
 
         job_id = str(req.get("job_id") or "unknown")
         version = req.get("protocol_version")
         if version != PROTOCOL_VERSION:
             return make_envelope(
-                job_id=job_id,
-                kind="error",
-                source="unavailable",
-                confidence="unknown",
-                error_code="UNSUPPORTED_PROTOCOL",
+                job_id=job_id, kind="error", source="unavailable",
+                confidence="unknown", error_code="UNSUPPORTED_PROTOCOL",
                 error_message=f"Expected protocol_version {PROTOCOL_VERSION}, got {version!r}",
-            )
+            ), None
 
         method = req.get("method")
+        raw_params = req.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
         if method == "cancel":
-            target_id = str((req.get("params") or {}).get("target_job_id") or job_id)
+            target_id = str(params.get("target_job_id") or job_id)
             cancelled = self.request_cancel(target_id)
             return make_envelope(
-                job_id=job_id,
-                kind="result",
+                job_id=job_id, kind="result",
                 value={"target_job_id": target_id, "cancelled": cancelled},
-                source="measured",
-                confidence="high",
-            )
+                source="measured", confidence="high",
+            ), None
 
         handler = self._handlers.get(str(method))
         if handler is None:
             return make_envelope(
-                job_id=job_id,
-                kind="error",
-                source="unavailable",
-                confidence="unknown",
-                error_code="METHOD_NOT_FOUND",
+                job_id=job_id, kind="error", source="unavailable",
+                confidence="unknown", error_code="METHOD_NOT_FOUND",
                 error_message=f"Unknown method: {method!r}",
-            )
+            ), None
+        if method == "ping":
+            return self._run_job(job_id, "ping", handler, params, threading.Event()), None
+        return None, (job_id, str(method), handler, params)
 
-        cancel_event = threading.Event()
-        with self._lock:
-            self._active_jobs[job_id] = cancel_event
-
+    def _run_job(
+        self,
+        job_id: str,
+        method: str,
+        handler: HandlerFn,
+        params: dict[str, Any],
+        cancel_event: threading.Event,
+    ) -> dict[str, Any]:
         try:
             ctx = JobContext(job_id=job_id, cancel_event=cancel_event)
-            result = handler(req.get("params") or {}, ctx)
+            result = handler(params, ctx)
             kind = "pong" if method == "ping" else "result"
             return make_envelope(
                 job_id=job_id,
@@ -178,6 +183,17 @@ class NdjsonWorker:
             with self._lock:
                 self._active_jobs.pop(job_id, None)
 
+    def process_line(self, raw_line: str) -> dict[str, Any] | None:
+        """Parse and execute a single NDJSON request line synchronously."""
+        immediate, pending = self._parse_or_control(raw_line)
+        if pending is None:
+            return immediate
+        job_id, method, handler, params = pending
+        cancel_event = threading.Event()
+        with self._lock:
+            self._active_jobs[job_id] = cancel_event
+        return self._run_job(job_id, method, handler, params, cancel_event)
+
     def request_cancel(self, job_id: str) -> bool:
         """Signal cancellation for an active job if running."""
         with self._lock:
@@ -188,10 +204,43 @@ class NdjsonWorker:
             return True
 
     def serve(self, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
-        """Run the blocking NDJSON read/write loop until EOF."""
-        for line in stdin:
-            response = self.process_line(line)
-            if response is None:
-                continue
-            stdout.write(json.dumps(response) + "\n")
-            stdout.flush()
+        """Run NDJSON read/write loop with background execution so cancel/ping stay live."""
+        write_lock = threading.Lock()
+        job_queue: queue.Queue[
+            tuple[str, str, HandlerFn, dict[str, Any], threading.Event] | None
+        ] = queue.Queue()
+
+        def emit(envelope: dict[str, Any]) -> None:
+            line_out = json.dumps(envelope) + "\n"
+            with write_lock:
+                stdout.write(line_out)
+                stdout.flush()
+
+        def worker_loop() -> None:
+            while True:
+                item = job_queue.get()
+                if item is None:
+                    job_queue.task_done()
+                    break
+                job_id, method, handler, params, cancel_event = item
+                try:
+                    emit(self._run_job(job_id, method, handler, params, cancel_event))
+                finally:
+                    job_queue.task_done()
+
+        worker_thread = threading.Thread(target=worker_loop, daemon=True)
+        worker_thread.start()
+        try:
+            while line := stdin.readline():
+                immediate, pending = self._parse_or_control(line)
+                if immediate is not None:
+                    emit(immediate)
+                elif pending is not None:
+                    job_id, method, handler, params = pending
+                    cancel_event = threading.Event()
+                    with self._lock:
+                        self._active_jobs[job_id] = cancel_event
+                    job_queue.put((job_id, method, handler, params, cancel_event))
+        finally:
+            job_queue.put(None)
+            worker_thread.join()

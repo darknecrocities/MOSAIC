@@ -8,10 +8,10 @@ from mosaic_analytics.execution_planner import (
     GIB,
     HardwareMemoryBudget,
     compute_execution_plan,
-    normalize_profile,
     resolve_kv_cache_type,
-    resolve_memory_budget,
 )
+from mosaic_analytics.fit_inputs import is_pos_num, parse_fit_params
+from mosaic_analytics.numeric import safe_int
 from mosaic_analytics.protocol import JobContext
 
 QUANT_BPW: dict[str, float] = {
@@ -26,15 +26,17 @@ KV_BYTES_PER_ELEM: dict[str, float] = {"f16": 2.0, "q8_0": 1.0, "q4_0": 0.5}
 
 def _estimate_weights(model: dict[str, Any]) -> tuple[int | None, list[str], str]:
     """Estimate runtime weight memory in bytes from exact size or parameter count."""
-    size_bytes = model.get("download_size_bytes") or model.get("estimated_bytes")
-    if isinstance(size_bytes, int | float) and size_bytes > 0:
-        return int(size_bytes * 1.03), [], "high"
+    raw_size = model.get("download_size_bytes")
+    size_bytes = raw_size if is_pos_num(raw_size) else model.get("estimated_bytes")
+    if is_pos_num(size_bytes):
+        return int(float(size_bytes) * 1.03), [], "high"
 
-    params_b = model.get("parameter_billions") or model.get("params_b")
+    raw_params = model.get("parameter_billions")
+    params_b = raw_params if is_pos_num(raw_params) else model.get("params_b")
     quant = str(model.get("quantization") or "Q4_K_M").upper()
-    if isinstance(params_b, int | float) and params_b > 0:
+    if is_pos_num(params_b):
         bpw = QUANT_BPW.get(quant, 4.85)
-        estimated = int(params_b * 1e9 * (bpw / 8.0) * 1.05)
+        estimated = int(float(params_b) * 1e9 * (bpw / 8.0) * 1.05)
         notes = [f"Weight memory estimated from {params_b}B params at {quant} ({bpw} bpw)."]
         return estimated, notes, "medium"
 
@@ -49,15 +51,20 @@ def _estimate_kv_cache(
 ) -> tuple[int, list[str]]:
     """Compute KV cache bytes using GQA head dimensions and KV quantization."""
     kv_bpe = KV_BYTES_PER_ELEM.get(str(kv_cache_type or "f16").lower(), 2.0)
-    slots = max(1, int(num_parallel))
+    slots = max(1, safe_int(num_parallel, 1))
     n_layers, n_kv_heads, head_dim = (
         model.get("n_layers"), model.get("n_kv_heads"), model.get("head_dim")
     )
-    if all(isinstance(v, int) and v > 0 for v in (n_layers, n_kv_heads, head_dim)):
+    if all(
+        isinstance(v, int) and not isinstance(v, bool) and v > 0
+        for v in (n_layers, n_kv_heads, head_dim)
+    ):
         kv = int(2 * int(n_layers) * int(n_kv_heads) * int(head_dim) * context_length * kv_bpe)
         return kv * slots, []
 
-    params_b = float(model.get("parameter_billions") or model.get("params_b") or 7.0)
+    raw_p = model.get("parameter_billions")
+    p_cand = raw_p if is_pos_num(raw_p) else model.get("params_b")
+    params_b = float(p_cand) if is_pos_num(p_cand) else 7.0
     fallback = int((params_b / 7.0) * (context_length / 4096) * 0.55 * GIB * (kv_bpe / 2.0) * slots)
     return fallback, ["Architecture KV-head metadata missing; using conservative KV-cache range."]
 
@@ -88,7 +95,8 @@ def _assess_single_model(
                 "fit_status": "Unknown", "weight_memory_estimate": None,
                 "runtime_overhead_estimate": None, "kv_cache_estimate": None,
                 "total_estimated_bytes": None, "available_budget": None,
-                "context_length": context_length, "expected_backend": "unknown",
+                "context_length": context_length, "requested_context_length": context_length,
+                "expected_backend": "unknown",
                 "performance_estimate": "Not benchmarked yet", "reasons": weight_notes,
                 "execution_plan": None, "gpu_budget_bytes": None, "cpu_spill_budget_bytes": None,
             },
@@ -103,15 +111,18 @@ def _assess_single_model(
         budget.available_budget_bytes, context_length,
     )
     kv_bytes, _ = _estimate_kv_cache(model, context_length, resolved_kv, num_parallel)
-    total_required = weight_bytes + kv_bytes + overhead_bytes
     limitations = weight_notes + kv_notes
-    n_layers = int(model.get("n_layers") or 0)
+    n_layers = max(0, safe_int(model.get("n_layers"), 0))
 
     execution_plan = compute_execution_plan(
         profile=profile, kv_cache_type=resolved_kv, requested_ctx=context_length,
         weight_bytes=weight_bytes, kv_bytes=kv_bytes, overhead_bytes=overhead_bytes,
-        n_layers=n_layers, budget=budget, media_kind=media_kind,
+        n_layers=n_layers, budget=budget, media_kind=media_kind, num_parallel=num_parallel,
     )
+    plan_ctx = int(execution_plan["num_ctx"])
+    if plan_ctx < context_length:
+        kv_bytes, _ = _estimate_kv_cache(model, plan_ctx, resolved_kv, num_parallel)
+    total_required = weight_bytes + kv_bytes + overhead_bytes
 
     reasons: list[str] = []
     avail = budget.available_budget_bytes
@@ -147,6 +158,10 @@ def _assess_single_model(
             f"{avail / GIB:.1f} GiB safe budget."
         )
 
+    if plan_ctx < context_length:
+        reasons.append(
+            f"Context auto-adjusted from {context_length} to {plan_ctx} to fit memory budget."
+        )
     if media_kind == "HDD":
         reasons.append("External HDD selected: model loads will be noticeably slower than SSD.")
 
@@ -155,7 +170,8 @@ def _assess_single_model(
             "fit_status": fit_status, "weight_memory_estimate": weight_bytes,
             "runtime_overhead_estimate": overhead_bytes, "kv_cache_estimate": kv_bytes,
             "total_estimated_bytes": total_required, "available_budget": avail,
-            "context_length": context_length, "expected_backend": budget.backend,
+            "context_length": plan_ctx, "requested_context_length": context_length,
+            "expected_backend": budget.backend,
             "performance_estimate": "Not benchmarked yet", "reasons": reasons,
             "execution_plan": execution_plan,
             "gpu_budget_bytes": budget.gpu_budget_bytes,
@@ -168,45 +184,14 @@ def _assess_single_model(
     }
 
 
-def _normalize_hardware(params: dict[str, Any]) -> dict[str, Any]:
-    hardware = dict(params.get("hardware") or {})
-    if hardware:
-        return hardware
-    sys_prof = dict(params.get("system_profile") or {})
-    if not sys_prof:
-        return {}
-    vram = sys_prof.get("gpu_vram_bytes")
-    if vram is None and not sys_prof.get("is_unified_memory"):
-        gpu_vrams = [
-            int(g.get("vram_total_bytes") or g.get("vram_bytes") or 0)
-            for g in (sys_prof.get("gpus") or []) if isinstance(g, dict)
-        ]
-        vram = max(gpu_vrams, default=0) or None
-    return {
-        "is_unified_memory": sys_prof.get("is_unified_memory", False),
-        "ram_total_bytes": sys_prof.get("ram_total_bytes", 0),
-        "ram_available_bytes": sys_prof.get("ram_available_bytes", 0),
-        "ram_effective_avail_bytes": sys_prof.get("ram_effective_avail_bytes"),
-        "metal_wired_limit_bytes": sys_prof.get("metal_wired_limit_bytes"),
-        "gpu_vram_bytes": vram,
-        "physical_cores": sys_prof.get("physical_cores"),
-        "logical_cores": sys_prof.get("logical_cores"),
-        "probe_psutil": sys_prof.get("probe_psutil", False),
-    }
-
-
 def assess_model_fit(params: dict[str, Any], _ctx: JobContext) -> dict[str, Any]:
     """Assess single model compatibility against live hardware budget and storage media."""
-    storage = params.get("storage") or {}
-    media_kind = str(storage.get("media_kind") or params.get("media_kind") or "unknown").upper()
-    context_length = max(512, int(params.get("context_length") or 4096))
-    reserve_gib = float(params.get("safety_reserve_gib") or 2.0)
-    budget = resolve_memory_budget(_normalize_hardware(params), reserve_gib)
+    media_kind, ctx_len, profile, req_kv, num_parallel, budget = parse_fit_params(params)
+    raw_model = params.get("model")
     return _assess_single_model(
-        model=params.get("model") or {}, budget=budget, media_kind=media_kind,
-        context_length=context_length, profile=normalize_profile(params.get("execution_profile")),
-        requested_kv=params.get("kv_cache_type"),
-        num_parallel=max(1, int(params.get("num_parallel") or 1)),
+        model=raw_model if isinstance(raw_model, dict) else {},
+        budget=budget, media_kind=media_kind, context_length=ctx_len,
+        profile=profile, requested_kv=req_kv, num_parallel=num_parallel,
     )
 
 
@@ -215,14 +200,7 @@ def assess_model_fit_batch(params: dict[str, Any], ctx: JobContext) -> dict[str,
     models = params.get("models")
     if not isinstance(models, list):
         raise ValueError("models must be a list for estimate_fit_batch")
-    storage = params.get("storage") or {}
-    media_kind = str(storage.get("media_kind") or params.get("media_kind") or "unknown").upper()
-    context_length = max(512, int(params.get("context_length") or 4096))
-    reserve_gib = float(params.get("safety_reserve_gib") or 2.0)
-    profile = normalize_profile(params.get("execution_profile"))
-    requested_kv = params.get("kv_cache_type")
-    num_parallel = max(1, int(params.get("num_parallel") or 1))
-    budget = resolve_memory_budget(_normalize_hardware(params), reserve_gib)
+    media_kind, ctx_len, profile, req_kv, num_parallel, budget = parse_fit_params(params)
 
     assessments: list[dict[str, Any]] = []
     for entry in models:
@@ -230,8 +208,8 @@ def assess_model_fit_batch(params: dict[str, Any], ctx: JobContext) -> dict[str,
             break
         model = entry if isinstance(entry, dict) else {}
         res = _assess_single_model(
-            model=model, budget=budget, media_kind=media_kind, context_length=context_length,
-            profile=profile, requested_kv=requested_kv, num_parallel=num_parallel,
+            model=model, budget=budget, media_kind=media_kind, context_length=ctx_len,
+            profile=profile, requested_kv=req_kv, num_parallel=num_parallel,
         )
         item = dict(res["value"])
         item["model_id"] = model.get("ollama_name") or model.get("model_id") or model.get("name")
