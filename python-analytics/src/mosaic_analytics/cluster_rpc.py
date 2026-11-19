@@ -2,19 +2,57 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from mosaic_analytics.execution_planner import GIB
 from mosaic_analytics.numeric import safe_int
 
 
-def node_budget_bytes(node: dict[str, Any], reserve_gib: float) -> int:
+def _is_blocked_worker_host(host: str) -> bool:
+    clean = host.strip().strip("[]").rstrip(".")
+    if not clean:
+        return True
+    lower = clean.lower()
+    if (
+        lower in {"metadata", "metadata.google.internal"}
+        or lower.startswith("metadata.")
+        or lower.endswith(".internal")
+    ):
+        return True
+    try:
+        ip = ipaddress.ip_address(clean)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv4Address):
+        return ip.is_link_local or ip.is_unspecified or ip.is_multicast
+    v4_mapped = ip.ipv4_mapped
+    if v4_mapped is not None and (
+        v4_mapped.is_link_local or v4_mapped.is_unspecified or v4_mapped.is_multicast
+    ):
+        return True
+    return (
+        ip.is_link_local
+        or ip.is_unspecified
+        or ip.is_multicast
+        or clean.lower() == "fd00:ec2::254"
+    )
+
+
+def _format_endpoint(host: str, port: int) -> str:
+    clean = host.strip().strip("[]")
+    return f"[{clean}]:{port}" if ":" in clean else f"{clean}:{port}"
+
+
+def node_budget_bytes(node: dict[str, Any], reserve_gib: float, *, is_remote: bool = False) -> int:
     """Usable memory budget for a local or remote RPC node."""
     is_unified = bool(node.get("is_unified_memory"))
     vram = max(0, safe_int(node.get("vram_bytes"), 0))
     raw_ram = node.get("ram_effective_avail_bytes")
     ram = max(0, safe_int(raw_ram if raw_ram is not None else node.get("ram_available_bytes"), 0))
     if is_unified:
+        if is_remote:
+            return max(0, ram - int(reserve_gib * GIB))
         ram_total = max(0, safe_int(node.get("ram_total_bytes"), 0))
         metal_cap = max(0, safe_int(node.get("metal_wired_limit_bytes"), 0))
         if metal_cap <= 0:
@@ -35,7 +73,7 @@ def parse_valid_workers(workers: Any) -> list[dict[str, Any]]:
             continue
         raw_host = w.get("host")
         host = raw_host.strip() if isinstance(raw_host, str) else ""
-        if not host:
+        if not host or _is_blocked_worker_host(host):
             continue
         raw_port = w.get("port")
         if raw_port is None:
@@ -49,12 +87,12 @@ def parse_valid_workers(workers: Any) -> list[dict[str, Any]]:
                 continue
         if not (1 <= port <= 65535):
             continue
-        budget = node_budget_bytes(w, reserve_gib=1.0)
+        budget = node_budget_bytes(w, reserve_gib=1.0, is_remote=True)
         if budget > 0:
             valid.append(
                 {
                     "name": str(w.get("name") or host),
-                    "endpoint": f"{host}:{port}",
+                    "endpoint": _format_endpoint(host, port),
                     "budget": budget,
                 }
             )
