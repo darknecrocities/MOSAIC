@@ -228,14 +228,15 @@ async fn refresh_catalog_https_blocks_ssrf_redirects_and_streaming_oversize() {
     let srv = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let srv_addr = srv.local_addr().unwrap();
     tokio::spawn(async move {
-        for i in 0..2 {
-            if let Ok((mut sock, _)) = srv.accept().await {
-                let mut buf = [0_u8; 1024];
-                let _ = sock.read(&mut buf).await;
-                if i == 0 {
-                    let _ = sock.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\n\r\n").await;
+        while let Ok((mut sock, _)) = srv.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0_u8; 2048];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                if req_str.contains("/redir") {
+                    let _ = sock.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                 } else {
-                    let hdr = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+                    let hdr = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
                     let _ = sock.write_all(hdr.as_bytes()).await;
                     let chunk = vec![b'A'; 512 * 1024];
                     for _ in 0..5 {
@@ -245,7 +246,7 @@ async fn refresh_catalog_https_blocks_ssrf_redirects_and_streaming_oversize() {
                     }
                     let _ = sock.write_all(b"0\r\n\r\n").await;
                 }
-            }
+            });
         }
     });
 
