@@ -195,7 +195,8 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
         validateModel(model);
         if (!state.bootstrap.ollama.api_reachable || state.showFailModel === model) throw `Failed to query /api/show for ${model}`;
         const found = state.installed.find((m) => m.name === model);
-        return { model, family: found?.family ?? 'llama', parameter_size: found?.parameter_size ?? '3.2B', quantization_level: found?.quantization_level ?? 'Q4_K_M', native_context_length: 131072, template: '{{ .System }}\n{{ .Prompt }}', parameters: 'temperature 0.2', license: 'Apache-2.0' };
+        const fam = found?.family ?? 'llama';
+        return { model, details: { format: 'gguf', family: fam, families: [fam], parameter_size: found?.parameter_size ?? '3.2B', quantization_level: found?.quantization_level ?? 'Q4_K_M' }, native_context_length: 131072, template: '{{ .System }}\n{{ .Prompt }}', parameters: 'temperature 0.2', license: 'Apache-2.0' };
       }
       case 'start_chat_stream': {
         const req = (args.request ?? {}) as Record<string, unknown>, model = String(req.model ?? '');

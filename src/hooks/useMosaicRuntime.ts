@@ -38,7 +38,8 @@ export function useMosaicRuntime() {
   const [executionProfile, setExecutionProfile] = useState<ExecutionProfile>('auto_adaptive');
   const [kvCacheType, setKvCacheType] = useState<KvCacheType>('auto');
   const [lastCatalogRefresh, setLastCatalogRefresh] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(() => isTauriRuntime());
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
   const [selecting, setSelecting] = useState<boolean>(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -66,14 +67,18 @@ export function useMosaicRuntime() {
 
   const loadState = useCallback(async () => {
     if (!isTauriRuntime()) {
+      setLoading(false);
+      setBootstrapError(null);
       setNotice('Browser preview mode: launch the MOSAIC desktop window to access live hardware, external drives, and Ollama.');
       return;
     }
     setLoading(true);
+    setBootstrapError(null);
     try {
       const next = await mosaicApi.getAppState();
       if (!isMountedRef.current) return;
       setState(next);
+      setBootstrapError(null);
       if (!defaultsSyncedRef.current) {
         defaultsSyncedRef.current = true;
         setContextLength(next.settings.default_context_length || 4096);
@@ -81,7 +86,11 @@ export function useMosaicRuntime() {
         setKvCacheType((next.settings.kv_cache_type as KvCacheType) || 'auto');
       }
     } catch (err) {
-      if (isMountedRef.current) setNotice(toErrorMessage(err, 'Failed to query MOSAIC native core.'));
+      if (isMountedRef.current) {
+        const msg = toErrorMessage(err, 'Failed to query MOSAIC native core.');
+        setBootstrapError(msg);
+        setNotice(msg);
+      }
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
@@ -177,7 +186,7 @@ export function useMosaicRuntime() {
     route, setRoute, state, catalog, installed, reports, benchmarkingModel,
     selectedModel, setSelectedModel, messages, streaming, pullProgress,
     contextLength, setContextLength, executionProfile, setExecutionProfile,
-    kvCacheType, setKvCacheType, lastCatalogRefresh, loading, catalogLoading,
+    kvCacheType, setKvCacheType, lastCatalogRefresh, loading, bootstrapError, catalogLoading,
     selecting, notice, setNotice, loadState, loadInstalled,
     handleSelectVolume: async (volumeIdentifier: string) => {
       setSelecting(true);

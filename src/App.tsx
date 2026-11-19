@@ -10,13 +10,17 @@ import { MyModelsScreen } from './screens/MyModelsScreen';
 import { OverviewScreen } from './screens/OverviewScreen';
 import { RunModelScreen } from './screens/RunModelScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { isTauriRuntime } from './utils/tauriClient';
 
 export function App() {
   const rt = useMosaicRuntime();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
 
+  const hydratingBootstrap = rt.state === null && rt.loading;
   const showOnboarding =
-    (!rt.state || !rt.state.library_connected) &&
+    !hydratingBootstrap &&
+    !rt.bootstrapError &&
+    (rt.state ? !rt.state.library_connected : !isTauriRuntime()) &&
     rt.route !== 'hardware' &&
     rt.route !== 'settings' &&
     !(rt.state && rt.route === 'storage');
@@ -32,7 +36,12 @@ export function App() {
         void rt.loadInstalled();
       }}
     >
-      {rt.notice && (
+      {rt.bootstrapError && (
+        <section className="mosaic-callout mosaic-callout-error" role="alert">
+          <strong>Runtime Error:</strong> {rt.bootstrapError}
+        </section>
+      )}
+      {rt.notice && rt.notice !== rt.bootstrapError && (
         <section className="mosaic-callout mosaic-callout-info" role="status" aria-live="polite">
           <strong>Status:</strong> {rt.notice}
         </section>
@@ -40,125 +49,138 @@ export function App() {
       {rt.pullProgress && !rt.pullProgress.done && (
         <PullProgressBanner pullProgress={rt.pullProgress} onCancelPull={rt.handleCancelPull} />
       )}
-      {showOnboarding && (
-        <OnboardingGate
-          volumes={rt.state?.external_volumes ?? []}
-          selecting={rt.selecting}
-          onSelectVolume={(id) => void rt.handleSelectVolume(id)}
-          onInspectHardware={() => rt.setRoute('hardware')}
-        />
-      )}
-      {rt.state && rt.route === 'overview' && (
-        <OverviewScreen
-          state={rt.state}
-          installedCount={rt.installed.length}
-          onNavigate={rt.setRoute}
-        />
-      )}
-      {rt.route === 'discover' && (
-        <DiscoverModelsScreen
-          items={rt.catalog}
-          loading={rt.catalogLoading}
-          contextLength={rt.contextLength}
-          executionProfile={rt.executionProfile}
-          kvCacheType={rt.kvCacheType}
-          lastCatalogRefresh={rt.lastCatalogRefresh}
-          refreshingCatalog={refreshingCatalog}
-          libraryConnected={Boolean(rt.state?.library_connected)}
-          freeBytes={rt.state?.active_library?.free_bytes ?? 0}
-          pullingName={rt.pullProgress && !rt.pullProgress.done ? rt.pullProgress.model : null}
-          onChangeContextLength={rt.setContextLength}
-          onChangeExecutionProfile={rt.setExecutionProfile}
-          onChangeKvCacheType={rt.setKvCacheType}
-          onRefreshCatalog={() => {
-            setRefreshingCatalog(true);
-            void rt.handleRefreshCatalog().finally(() => setRefreshingCatalog(false));
-          }}
-          onPullModel={(name) => void rt.handlePullModel(name)}
-        />
-      )}
-      {rt.route === 'my-models' && (
-        <MyModelsScreen
-          models={rt.installed}
-          reports={rt.reports}
-          loading={rt.loading}
-          libraryConnected={Boolean(rt.state?.library_connected)}
-          benchmarkingModel={rt.benchmarkingModel}
-          onRefresh={() => void rt.loadInstalled()}
-          onLaunchModel={(name) => {
-            rt.setSelectedModel(name);
-            rt.setRoute('run');
-          }}
-          onRunBenchmark={(model, contextLength, repetitions) =>
-            rt.handleRunBenchmark({
-              model,
-              contextLength: contextLength ?? rt.contextLength,
-              repetitions: repetitions ?? 2,
-              executionProfile: rt.executionProfile,
-              kvCacheType: rt.kvCacheType,
-            })
-          }
-          onExportReport={(id, fmt) => void rt.handleExportReport(id, fmt)}
-          onDeleteModel={rt.handleDeleteModel}
-        />
-      )}
-      {rt.route === 'run' && (
-        <RunModelScreen
-          models={rt.installed}
-          selectedModel={rt.selectedModel}
-          libraryConnected={Boolean(rt.state?.library_connected)}
-          ollamaReachable={Boolean(rt.state?.ollama.api_reachable)}
-          streaming={rt.streaming}
-          messages={rt.messages}
-          telemetry={rt.state?.telemetry}
-          defaultContextLength={rt.state?.settings.default_context_length ?? rt.contextLength}
-          executionProfile={rt.executionProfile}
-          kvCacheType={rt.kvCacheType}
-          onSelectModel={rt.setSelectedModel}
-          onSendMessage={(prompt, numCtx, temperature, opts) =>
-            void rt.handleSendMessage(prompt, {
-              numCtx,
-              temperature,
-              executionProfile: opts?.executionProfile ?? rt.executionProfile,
-              kvCacheType: opts?.kvCacheType ?? rt.kvCacheType,
-              numGpu: opts?.numGpu ?? null,
-              keepAlive: rt.state?.settings.keep_alive ?? '5m',
-            })
-          }
-          onStopGeneration={rt.handleStopGeneration}
-          onUnloadModel={rt.handleUnloadModel}
-          onNewSession={rt.handleNewSession}
-          onStartManagedOllama={rt.handleStartManagedOllama}
-        />
-      )}
-      {rt.route === 'hardware' &&
-        (rt.state ? (
-          <HardwareScreen state={rt.state} />
-        ) : (
-          <section className="mosaic-panel" aria-labelledby="hw-empty">
-            <h2 id="hw-empty">Hardware &amp; Memory Profile</h2>
-            <p className="mosaic-subtitle">
-              Hardware telemetry requires the native MOSAIC Tauri runtime.
-            </p>
-          </section>
-        ))}
-      {rt.state && rt.route === 'storage' && (
-        <ExternalStorageScreen
-          state={rt.state}
-          selecting={rt.selecting}
-          onSelectVolume={(id) => void rt.handleSelectVolume(id)}
-          onInspectHardware={() => rt.setRoute('hardware')}
-          onConfigureOllamaStorage={rt.handleConfigureOllamaStorage}
-          onStartManagedOllama={rt.handleStartManagedOllama}
-          onStopManagedOllama={rt.handleStopManagedOllama}
-          onSafeEject={rt.handleSafeEject}
-        />
-      )}
-      {rt.state && rt.route === 'settings' && (
-        <SettingsScreen
-          settings={rt.state.settings}
-          onSaveSetting={rt.handleSaveSetting}
-        />
+      {hydratingBootstrap ? (
+        <section className="mosaic-panel" role="status" aria-live="polite" aria-labelledby="loading-heading">
+          <div className="mosaic-panel-header">
+            <h2 id="loading-heading">Loading MOSAIC Runtime</h2>
+          </div>
+          <p className="mosaic-subtitle">
+            Probing host hardware, external storage volumes, and Ollama runtime...
+          </p>
+        </section>
+      ) : (
+        <>
+          {showOnboarding && (
+            <OnboardingGate
+              volumes={rt.state?.external_volumes ?? []}
+              selecting={rt.selecting}
+              onSelectVolume={(id) => void rt.handleSelectVolume(id)}
+              onInspectHardware={() => rt.setRoute('hardware')}
+            />
+          )}
+          {rt.state && rt.route === 'overview' && (
+            <OverviewScreen
+              state={rt.state}
+              installedCount={rt.installed.length}
+              onNavigate={rt.setRoute}
+            />
+          )}
+          {rt.route === 'discover' && (
+            <DiscoverModelsScreen
+              items={rt.catalog}
+              loading={rt.catalogLoading}
+              contextLength={rt.contextLength}
+              executionProfile={rt.executionProfile}
+              kvCacheType={rt.kvCacheType}
+              lastCatalogRefresh={rt.lastCatalogRefresh}
+              refreshingCatalog={refreshingCatalog}
+              libraryConnected={Boolean(rt.state?.library_connected)}
+              freeBytes={rt.state?.active_library?.free_bytes ?? 0}
+              pullingName={rt.pullProgress && !rt.pullProgress.done ? rt.pullProgress.model : null}
+              onChangeContextLength={rt.setContextLength}
+              onChangeExecutionProfile={rt.setExecutionProfile}
+              onChangeKvCacheType={rt.setKvCacheType}
+              onRefreshCatalog={() => {
+                setRefreshingCatalog(true);
+                void rt.handleRefreshCatalog().finally(() => setRefreshingCatalog(false));
+              }}
+              onPullModel={(name) => void rt.handlePullModel(name)}
+            />
+          )}
+          {rt.route === 'my-models' && (
+            <MyModelsScreen
+              models={rt.installed}
+              reports={rt.reports}
+              loading={rt.loading}
+              libraryConnected={Boolean(rt.state?.library_connected)}
+              benchmarkingModel={rt.benchmarkingModel}
+              onRefresh={() => void rt.loadInstalled()}
+              onLaunchModel={(name) => {
+                rt.setSelectedModel(name);
+                rt.setRoute('run');
+              }}
+              onRunBenchmark={(model, contextLength, repetitions) =>
+                rt.handleRunBenchmark({
+                  model,
+                  contextLength: contextLength ?? rt.contextLength,
+                  repetitions: repetitions ?? 2,
+                  executionProfile: rt.executionProfile,
+                  kvCacheType: rt.kvCacheType,
+                })
+              }
+              onExportReport={(id, fmt) => void rt.handleExportReport(id, fmt)}
+              onDeleteModel={rt.handleDeleteModel}
+            />
+          )}
+          {rt.route === 'run' && (
+            <RunModelScreen
+              models={rt.installed}
+              selectedModel={rt.selectedModel}
+              libraryConnected={Boolean(rt.state?.library_connected)}
+              ollamaReachable={Boolean(rt.state?.ollama.api_reachable)}
+              streaming={rt.streaming}
+              messages={rt.messages}
+              telemetry={rt.state?.telemetry}
+              defaultContextLength={rt.state?.settings.default_context_length ?? rt.contextLength}
+              executionProfile={rt.executionProfile}
+              kvCacheType={rt.kvCacheType}
+              onSelectModel={rt.setSelectedModel}
+              onSendMessage={(prompt, numCtx, temperature, opts) =>
+                void rt.handleSendMessage(prompt, {
+                  numCtx,
+                  temperature,
+                  executionProfile: opts?.executionProfile ?? rt.executionProfile,
+                  kvCacheType: opts?.kvCacheType ?? rt.kvCacheType,
+                  numGpu: opts?.numGpu ?? null,
+                  keepAlive: rt.state?.settings.keep_alive ?? '5m',
+                })
+              }
+              onStopGeneration={rt.handleStopGeneration}
+              onUnloadModel={rt.handleUnloadModel}
+              onNewSession={rt.handleNewSession}
+              onStartManagedOllama={rt.handleStartManagedOllama}
+            />
+          )}
+          {rt.route === 'hardware' &&
+            (rt.state ? (
+              <HardwareScreen state={rt.state} />
+            ) : (
+              <section className="mosaic-panel" aria-labelledby="hw-empty">
+                <h2 id="hw-empty">Hardware &amp; Memory Profile</h2>
+                <p className="mosaic-subtitle">
+                  Hardware telemetry requires the native MOSAIC Tauri runtime.
+                </p>
+              </section>
+            ))}
+          {rt.state && rt.route === 'storage' && (
+            <ExternalStorageScreen
+              state={rt.state}
+              selecting={rt.selecting}
+              onSelectVolume={(id) => void rt.handleSelectVolume(id)}
+              onInspectHardware={() => rt.setRoute('hardware')}
+              onConfigureOllamaStorage={rt.handleConfigureOllamaStorage}
+              onStartManagedOllama={rt.handleStartManagedOllama}
+              onStopManagedOllama={rt.handleStopManagedOllama}
+              onSafeEject={rt.handleSafeEject}
+            />
+          )}
+          {rt.state && rt.route === 'settings' && (
+            <SettingsScreen
+              settings={rt.state.settings}
+              onSaveSetting={rt.handleSaveSetting}
+            />
+          )}
+        </>
       )}
     </AppShell>
   );

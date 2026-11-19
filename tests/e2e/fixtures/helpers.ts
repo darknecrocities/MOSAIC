@@ -30,6 +30,20 @@ export async function openApp(page: Page): Promise<void> {
   await page.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
   await page.goto('/');
   await expect(page.getByRole('banner')).toBeVisible();
+  const rescanBtn = page.getByRole('button', {
+    name: 'Rescan host hardware, external drives, and Ollama',
+  });
+  await expect(rescanBtn).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Loading MOSAIC Runtime' })).toBeHidden();
+  const isTauri = await page.evaluate(() => Boolean(window.isTauri));
+  if (isTauri) {
+    await expect
+      .poll(async () => {
+        const cmds = (await getInvokeLog(page)).map((e) => e.cmd);
+        return cmds.includes('get_app_state') && cmds.includes('list_installed_models');
+      })
+      .toBe(true);
+  }
 }
 
 export async function clickRescan(page: Page): Promise<void> {
