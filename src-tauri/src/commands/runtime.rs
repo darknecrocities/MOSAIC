@@ -255,7 +255,7 @@ pub async fn stop_managed_ollama(
 }
 
 #[tauri::command]
-pub fn prepare_safe_eject(
+pub async fn prepare_safe_eject(
     state: State<'_, AppState>,
     runtime: State<'_, RuntimeState>,
 ) -> Result<String, String> {
@@ -265,6 +265,19 @@ pub fn prepare_safe_eject(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No active external library configured.".to_string())?;
     let active_ops = runtime.downloads.has_active() || runtime.inference.is_running();
+    if active_ops {
+        let msg = "Stop active model downloads or inference before ejecting.".to_string();
+        let _ = telemetry::log_diagnostic(&state.store, "warn", "volume_manager", &format!("Safe eject rejected: {msg}"));
+        return Err(msg);
+    }
+    if state.ollama.stop_if_running().await {
+        let _ = telemetry::log_diagnostic(
+            &state.store,
+            "info",
+            "ollama_supervisor",
+            "Stopped managed Ollama prior to external volume eject",
+        );
+    }
     match volume_manager::prepare_safe_eject(&active_library.mount_path, active_ops) {
         Ok(msg) => {
             let _ = telemetry::log_diagnostic(&state.store, "info", "volume_manager", &msg);

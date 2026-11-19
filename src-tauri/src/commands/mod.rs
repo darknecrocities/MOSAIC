@@ -1,3 +1,4 @@
+pub mod benchmark_helpers;
 pub mod benchmarks;
 pub mod cluster;
 pub mod runtime;

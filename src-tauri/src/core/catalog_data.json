@@ -169,20 +169,20 @@
     "summary": "235B sparse MoE (22B active); requires multi-node GGML_RPC pooling or MoE expert tiering."
   },
   {
-    "ollama_name": "hf.co/unsloth/Qwen3-30B-A3B-GGUF:IQ2_XS",
+    "ollama_name": "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS",
     "display_name": "Qwen 3 30B-A3B MoE (IQ2_XS)",
-    "provider": "Alibaba / Unsloth",
+    "provider": "Alibaba / Bartowski",
     "parameter_billions": 30.5,
     "active_parameter_billions": 3.3,
     "is_moe": true,
     "quantization": "IQ2_XS",
-    "download_size_bytes": 9200000000,
+    "download_size_bytes": 9140316832,
     "n_layers": 48,
     "n_kv_heads": 4,
     "head_dim": 128,
     "default_context": 4096,
     "license_name": "Apache-2.0",
-    "license_url": "https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF",
+    "license_url": "https://huggingface.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF",
     "summary": "Ultra-compact IQ2_XS sparse 30.5B MoE (3.3B active) tuned for 16 GiB unified memory hosts."
   },
   {

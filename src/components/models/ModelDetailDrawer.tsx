@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Download, Layers, X } from 'lucide-react';
 import type { CatalogModelWithFit, ClusterPlan } from '../../types/ipc';
 import { formatGiB } from '../../utils/format';
@@ -63,7 +64,7 @@ export function ModelDetailDrawer({
     }
   };
 
-  return (
+  const drawer = (
     <div
       className="mosaic-drawer-backdrop"
       role="dialog"
@@ -204,4 +205,6 @@ export function ModelDetailDrawer({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(drawer, document.body) : drawer;
 }

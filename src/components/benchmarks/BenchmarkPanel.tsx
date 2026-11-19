@@ -107,19 +107,28 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
                 {analysis && (
                   <div className="mosaic-panel mosaic-stack-sm" aria-label={`Performance analysis for ${r.model_name}`}>
                     {analysis.summary && <p className="mosaic-subtitle">{analysis.summary}</p>}
-                    {ratios && Object.entries(ratios).map(([k, v]) => (
-                      <div key={k} className="mosaic-kv">
-                        <span className="mosaic-kv-label">{k}</span>
-                        <span className="mosaic-num">{String(v)}</span>
-                      </div>
-                    ))}
+                    {ratios &&
+                      Object.entries(ratios)
+                        .filter(([, v]) => v !== null && v !== undefined)
+                        .map(([k, v]) => (
+                          <div key={k} className="mosaic-kv">
+                            <span className="mosaic-kv-label">{k}</span>
+                            <span className="mosaic-num">{String(v)}</span>
+                          </div>
+                        ))}
                     {analysis.bottlenecks.length > 0 && (
                       <ul className="mosaic-list">
-                        {analysis.bottlenecks.map((b, idx) => (
-                          <li key={idx} className="mosaic-subtitle">
-                            {String(b.component ?? b.type ?? 'bottleneck')}: {String(b.detail ?? b.message ?? JSON.stringify(b))}
-                          </li>
-                        ))}
+                        {analysis.bottlenecks.map((b, idx) => {
+                          const label = b.category ?? b.component ?? b.type ?? 'bottleneck';
+                          const severity = b.severity ? ` (${String(b.severity)})` : '';
+                          const detail =
+                            b.explanation ?? b.detail ?? b.summary ?? b.message ?? JSON.stringify(b);
+                          return (
+                            <li key={idx} className="mosaic-subtitle">
+                              {String(label)}{severity}: {String(detail)}
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                     {recommendations.length > 0 && (

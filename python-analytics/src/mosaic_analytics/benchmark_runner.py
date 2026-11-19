@@ -83,6 +83,52 @@ def _build_options(params: dict[str, Any], context_length: int) -> dict[str, Any
     return options
 
 
+def _resolve_applied_metadata(params: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    applied = dict(options)
+    raw_opts = params.get("options") or params.get("execution_plan") or {}
+    if not isinstance(raw_opts, dict):
+        raw_opts = {}
+
+    profile = (
+        params.get("execution_profile")
+        or raw_opts.get("execution_profile")
+        or raw_opts.get("profile")
+    )
+    if isinstance(profile, str) and profile.strip():
+        applied["execution_profile"] = profile.strip().lower()
+
+    kv_raw = params.get("kv_cache_type") or raw_opts.get("kv_cache_type")
+    if isinstance(kv_raw, str) and kv_raw.strip():
+        kv_norm = kv_raw.strip().lower()
+        if kv_norm == "auto":
+            prof = applied.get("execution_profile")
+            if prof == "constrained_memory":
+                kv_norm = "q4_0"
+            elif prof == "balanced":
+                kv_norm = "q8_0"
+            elif prof == "max_quality":
+                kv_norm = "f16"
+        applied["kv_cache_type"] = kv_norm
+
+    offload = safe_optional_float(params.get("offload_ratio"))
+    if offload is None:
+        offload = safe_optional_float(raw_opts.get("offload_ratio"))
+    if offload is None:
+        ngl = options.get("num_gpu")
+        n_layers = safe_int(params.get("n_layers") or raw_opts.get("n_layers"), 0)
+        if isinstance(ngl, int) and not isinstance(ngl, bool):
+            if ngl == 0:
+                offload = 0.0
+            elif ngl >= 999:
+                offload = 1.0
+            elif n_layers > 0 and ngl > 0:
+                offload = min(1.0, ngl / n_layers)
+    if offload is not None and 0.0 <= offload <= 1.0:
+        applied["offload_ratio"] = round(offload, 3)
+
+    return applied
+
+
 def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     """Execute cold-load and repeated warm-load trials against Ollama."""
     endpoint = _validate_loopback(str(params.get("endpoint") or "http://127.0.0.1:11434"))
@@ -97,6 +143,7 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
     warm_raw = safe_optional_float(params.get("warm_load_timeout_s"))
     warm_timeout_s = max(30.0, warm_raw if (warm_raw is not None and warm_raw > 0) else 120.0)
     options = _build_options(params, context_length)
+    applied_options = _resolve_applied_metadata(params, options)
     keep_alive = params.get("keep_alive")
 
     idle_vm = psutil.virtual_memory()
@@ -163,7 +210,7 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
             "warm_load_ms": _summarize(warm_loads) if warm_loads else None,
             "ttft_ms": _summarize(ttft_samples),
             "generation_tok_per_sec": _summarize(tps_samples),
-            "applied_options": options,
+            "applied_options": applied_options,
             "cold_load_timeout_s": cold_timeout_s,
         },
         "unit": "mixed",

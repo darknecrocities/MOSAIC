@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 from mosaic_analytics.model_fit_analyzer import GIB
 from mosaic_analytics.performance_analyzer import analyze_performance
@@ -99,3 +100,47 @@ def test_analyze_performance_guards_non_numeric_and_malformed_inputs() -> None:
     assert val["summary"] == "No major hardware bottlenecks detected."
     assert val["efficiency_ratios"]["cold_to_warm_load_ratio"] is None
     assert val["efficiency_ratios"]["offload_ratio"] is None
+
+
+def test_constrained_q4_kv_16gb_benchmark_avoids_false_kv_cache_pressure(monkeypatch) -> None:
+    from mosaic_analytics import benchmark_runner
+
+    def fake_post(_url: str, payload: dict[str, Any], timeout_s: float = 60.0) -> dict[str, Any]:
+        if payload.get("keep_alive") == 0:
+            return {"done": True}
+        return {
+            "done": True,
+            "load_duration": 186_571_730_000,
+            "prompt_eval_duration": 256_970_000,
+            "eval_duration": 1_000_000_000,
+            "eval_count": 33,
+        }
+
+    monkeypatch.setattr(benchmark_runner, "_post_json", fake_post)
+    bench = benchmark_runner.run_benchmark(
+        {
+            "endpoint": "http://127.0.0.1:11434",
+            "model": "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS",
+            "repetitions": 2,
+            "context_length": 4096,
+            "execution_profile": "constrained_memory",
+            "kv_cache_type": "q4_0",
+            "offload_ratio": 1.0,
+        },
+        _ctx("bench-ch1"),
+    )["value"]
+    bench["peak_ram_used_bytes"] = 12_534_431_744
+
+    perf = analyze_performance(
+        {
+            "report": bench,
+            "system_profile": {"ram_total_bytes": 16 * GIB},
+            "storage": {"media_kind": "SSD"},
+            "execution_plan": bench["applied_options"],
+        },
+        _ctx("perf-ch1"),
+    )["value"]
+    cats = {b["category"] for b in perf["bottlenecks"]}
+    assert "kv_cache_pressure" not in cats
+    assert perf["efficiency_ratios"]["memory_utilization_ratio"] == 0.73
+    assert perf["efficiency_ratios"]["offload_ratio"] == 1.0

@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import type { ModelShowDetails } from '../../types/ipc';
 
@@ -18,9 +20,18 @@ export function ModelShowModal({
   details,
   onClose,
 }: ModelShowModalProps) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
-  return (
+  const modal = (
     <div
       className="mosaic-modal-backdrop"
       role="dialog"
@@ -116,4 +127,6 @@ export function ModelShowModal({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : modal;
 }

@@ -330,10 +330,13 @@ pub async fn unload_model(endpoint: &str, model: &str) -> Result<(), InferenceEr
         .timeout(Duration::from_secs(10))
         .build()?;
     let url = format!("{}/api/generate", base_url.as_str().trim_end_matches('/'));
-    let _ = client
+    let resp = client
         .post(&url)
         .json(&serde_json::json!({ "model": model, "keep_alive": 0 }))
         .send()
         .await?;
+    if !resp.status().is_success() {
+        return Err(InferenceError::RemoteError(format!("HTTP {}", resp.status())));
+    }
     Ok(())
 }

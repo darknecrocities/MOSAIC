@@ -22,6 +22,8 @@ def analyze_performance(params: dict[str, Any], _ctx: JobContext) -> dict[str, A
     raw_hw = params.get("system_profile") or params.get("hardware")
     hardware = raw_hw if isinstance(raw_hw, dict) else {}
     raw_plan = params.get("execution_plan") or fit.get("execution_plan")
+    if not isinstance(raw_plan, dict) and isinstance(report, dict):
+        raw_plan = report.get("applied_options")
     execution_plan = raw_plan if isinstance(raw_plan, dict) else {}
 
     bottlenecks: list[dict[str, str]] = []
@@ -128,9 +130,25 @@ def analyze_performance(params: dict[str, Any], _ctx: JobContext) -> dict[str, A
             )
             recommendations.append("Lower num_ctx or tune num_batch/num_ubatch for faster prefill.")
 
+        applied_opts = report.get("applied_options")
+        applied_kv = applied_opts.get("kv_cache_type") if isinstance(applied_opts, dict) else None
         kv_type = str(
-            execution_plan.get("kv_cache_type") or params.get("kv_cache_type") or "f16"
+            execution_plan.get("kv_cache_type")
+            or params.get("kv_cache_type")
+            or applied_kv
+            or "f16"
         ).lower()
+        if kv_type == "auto":
+            prof = str(
+                execution_plan.get("execution_profile")
+                or execution_plan.get("profile")
+                or params.get("execution_profile")
+                or ""
+            ).lower()
+            if prof == "constrained_memory":
+                kv_type = "q4_0"
+            elif prof == "balanced":
+                kv_type = "q8_0"
         raw_ctx = report.get("context_length")
         if raw_ctx is None:
             raw_ctx = execution_plan.get("num_ctx")

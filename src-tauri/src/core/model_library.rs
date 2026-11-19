@@ -77,7 +77,7 @@ pub async fn list_installed_models(endpoint: &str) -> Result<Vec<InstalledModel>
     let base_url = ollama_manager::validate_loopback_endpoint(endpoint)?;
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
         .build()?;
 
     let url = format!("{}/api/tags", base_url.as_str().trim_end_matches('/'));
@@ -110,7 +110,7 @@ pub async fn show_model_details(
     let base_url = ollama_manager::validate_loopback_endpoint(endpoint)?;
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
         .build()?;
 
     let url = format!("{}/api/show", base_url.as_str().trim_end_matches('/'));

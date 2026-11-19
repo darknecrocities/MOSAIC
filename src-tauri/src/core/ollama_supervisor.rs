@@ -83,7 +83,7 @@ pub fn compute_adaptive_ollama_env(
 }
 
 impl OllamaSupervisor {
-    fn has_live_child(&self) -> bool {
+    pub fn has_live_child(&self) -> bool {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(child) = guard.as_mut() {
                 if matches!(child.try_wait(), Ok(None)) {
@@ -183,6 +183,13 @@ impl OllamaSupervisor {
             let _ = proc_child.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(3), proc_child.wait()).await;
             return true;
+        }
+        false
+    }
+
+    pub async fn stop_if_running(&self) -> bool {
+        if self.has_live_child() {
+            return self.kill_child().await;
         }
         false
     }
