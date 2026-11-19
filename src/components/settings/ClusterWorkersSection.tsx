@@ -32,7 +32,14 @@ export function ClusterWorkersSection() {
     const port = Number(workerPort);
     const vram = Number(workerVram);
     const ram = Number(workerRam);
-    if (!workerPort.trim() || !Number.isFinite(port) || !Number.isFinite(vram) || !Number.isFinite(ram)) {
+    if (
+      !workerPort.trim() ||
+      !workerVram.trim() ||
+      !workerRam.trim() ||
+      !Number.isFinite(port) ||
+      !Number.isFinite(vram) ||
+      !Number.isFinite(ram)
+    ) {
       setClusterNotice('Worker port, VRAM, and RAM must be valid numbers.');
       return;
     }

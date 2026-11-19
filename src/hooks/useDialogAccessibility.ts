@@ -60,7 +60,12 @@ export function useDialogAccessibility({ open, dialogRef, onClose }: UseDialogAc
         const last = focusables[focusables.length - 1];
         const active = document.activeElement as HTMLElement | null;
         if (e.shiftKey) {
-          if (!active || active === first || !dialogRef.current.contains(active)) {
+          if (
+            !active ||
+            active === dialogRef.current ||
+            active === first ||
+            !dialogRef.current.contains(active)
+          ) {
             e.preventDefault();
             last.focus();
           }

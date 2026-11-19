@@ -210,12 +210,14 @@ export function useMosaicRuntime() {
       void mosaicApi.cancelPull(model)
         .then((cancelled) => {
           if (isMountedRef.current && !cancelled) {
-            setPullProgress((prev) => (prev && prev.model === model ? { ...prev, done: true } : null));
+            setPullProgress((prev) =>
+              prev && prev.model === model ? { ...prev, done: true } : prev
+            );
           }
         })
         .catch((err) => {
           if (isMountedRef.current) {
-            setPullProgress(null);
+            setPullProgress((prev) => (prev?.model === model ? null : prev));
             setNotice(toErrorMessage(err));
           }
         });

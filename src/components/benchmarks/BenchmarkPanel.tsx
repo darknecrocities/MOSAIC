@@ -138,6 +138,13 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
                     {bottlenecks.length > 0 && (
                       <ul className="mosaic-list">
                         {bottlenecks.map((b, idx) => {
+                          if (!b || typeof b !== 'object') {
+                            return (
+                              <li key={idx} className="mosaic-subtitle">
+                                {b == null ? 'bottleneck: unknown' : String(b)}
+                              </li>
+                            );
+                          }
                           const label = b.category ?? b.component ?? b.type ?? 'bottleneck';
                           const severity = b.severity ? ` (${String(b.severity)})` : '';
                           const detail =

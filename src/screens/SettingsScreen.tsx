@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ClusterWorkersSection } from '../components/settings/ClusterWorkersSection';
 import { DiagnosticsLogPanel } from '../components/settings/DiagnosticsLogPanel';
 import type { AppSettingsSnapshot } from '../types/ipc';
@@ -7,6 +7,40 @@ import { toErrorMessage } from '../utils/tauriClient';
 interface SettingsScreenProps {
   settings: AppSettingsSnapshot;
   onSaveSetting: (key: string, value: unknown) => Promise<void>;
+}
+
+type SettingsDraft = {
+  reserve: string;
+  endpoint: string;
+  profile: string;
+  kvType: string;
+  defaultCtx: string;
+  maxModels: string;
+  numParallel: string;
+  keepAlive: string;
+  numBatch: string;
+  numUbatch: string;
+  numThread: string;
+  pollMs: string;
+  mgmtMode: string;
+};
+
+function snapshotToDraft(s: AppSettingsSnapshot): SettingsDraft {
+  return {
+    reserve: String(s.safety_reserve_gib),
+    endpoint: s.ollama_endpoint,
+    profile: s.execution_profile,
+    kvType: s.kv_cache_type,
+    defaultCtx: String(s.default_context_length),
+    maxModels: String(s.max_loaded_models),
+    numParallel: String(s.num_parallel),
+    keepAlive: s.keep_alive,
+    numBatch: s.num_batch != null ? String(s.num_batch) : '',
+    numUbatch: s.num_ubatch != null ? String(s.num_ubatch) : '',
+    numThread: s.num_thread != null ? String(s.num_thread) : '',
+    pollMs: String(s.telemetry_poll_ms),
+    mgmtMode: s.ollama_management_mode,
+  };
 }
 
 function parseNumericInput(raw: string, label: string): number {
@@ -18,87 +52,93 @@ function parseNumericInput(raw: string, label: string): number {
 }
 
 export function SettingsScreen({ settings, onSaveSetting }: SettingsScreenProps) {
-  const [reserve, setReserve] = useState(String(settings.safety_reserve_gib));
-  const [endpoint, setEndpoint] = useState(settings.ollama_endpoint);
-  const [profile, setProfile] = useState(settings.execution_profile);
-  const [kvType, setKvType] = useState(settings.kv_cache_type);
-  const [defaultCtx, setDefaultCtx] = useState(String(settings.default_context_length));
-  const [maxModels, setMaxModels] = useState(String(settings.max_loaded_models));
-  const [numParallel, setNumParallel] = useState(String(settings.num_parallel));
-  const [keepAlive, setKeepAlive] = useState(settings.keep_alive);
-  const [numBatch, setNumBatch] = useState(settings.num_batch != null ? String(settings.num_batch) : '');
-  const [numUbatch, setNumUbatch] = useState(settings.num_ubatch != null ? String(settings.num_ubatch) : '');
-  const [numThread, setNumThread] = useState(settings.num_thread != null ? String(settings.num_thread) : '');
-  const [pollMs, setPollMs] = useState(String(settings.telemetry_poll_ms));
-  const [mgmtMode, setMgmtMode] = useState(settings.ollama_management_mode);
+  const [draft, setDraft] = useState<SettingsDraft>(() => snapshotToDraft(settings));
+  const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   const savingRef = useRef(false);
-  const skipNextSyncRef = useRef(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const syncedDraftRef = useRef<SettingsDraft>(snapshotToDraft(settings));
   const latestSettingsRef = useRef(settings);
   latestSettingsRef.current = settings;
 
-  const syncFromSettings = useCallback((next: AppSettingsSnapshot) => {
-    setReserve(String(next.safety_reserve_gib));
-    setEndpoint(next.ollama_endpoint);
-    setProfile(next.execution_profile);
-    setKvType(next.kv_cache_type);
-    setDefaultCtx(String(next.default_context_length));
-    setMaxModels(String(next.max_loaded_models));
-    setNumParallel(String(next.num_parallel));
-    setKeepAlive(next.keep_alive);
-    setNumBatch(next.num_batch != null ? String(next.num_batch) : '');
-    setNumUbatch(next.num_ubatch != null ? String(next.num_ubatch) : '');
-    setNumThread(next.num_thread != null ? String(next.num_thread) : '');
-    setPollMs(String(next.telemetry_poll_ms));
-    setMgmtMode(next.ollama_management_mode);
-  }, []);
+  const setField = (field: keyof SettingsDraft, value: string) => {
+    setDraft((prev) => ({ ...prev, [field]: value }));
+  };
 
   useEffect(() => {
     if (savingRef.current) return;
-    if (skipNextSyncRef.current) {
-      skipNextSyncRef.current = false;
-      return;
+    const prevSynced = syncedDraftRef.current;
+    const nextSynced = snapshotToDraft(settings);
+    const curr = draftRef.current;
+    const updated = { ...curr };
+    for (const k of Object.keys(nextSynced) as Array<keyof SettingsDraft>) {
+      if (curr[k] === prevSynced[k]) updated[k] = nextSynced[k];
     }
-    syncFromSettings(settings);
-  }, [settings, syncFromSettings]);
+    syncedDraftRef.current = nextSynced;
+    setDraft(updated);
+  }, [settings]);
 
   const handleSave = async () => {
+    if (savingRef.current) return;
     setSavedNotice(null);
     setErrorNotice(null);
     const startSettings = latestSettingsRef.current;
+    const startDraft = snapshotToDraft(startSettings);
+    const current = draftRef.current;
     savingRef.current = true;
-    let succeeded = false;
+    setSaving(true);
+    const savedFieldValues: Partial<SettingsDraft> = {};
     try {
-      const candidates: Array<[string, unknown, unknown]> = [
-        ['safety_reserve_gib', parseNumericInput(reserve, 'OS Memory Safety Reserve'), startSettings.safety_reserve_gib],
-        ['ollama_endpoint', endpoint, startSettings.ollama_endpoint],
-        ['execution_profile', profile, startSettings.execution_profile],
-        ['kv_cache_type', kvType, startSettings.kv_cache_type],
-        ['default_context_length', parseNumericInput(defaultCtx, 'Default Context Length'), startSettings.default_context_length],
-        ['max_loaded_models', parseNumericInput(maxModels, 'Max Loaded Models'), startSettings.max_loaded_models],
-        ['num_parallel', parseNumericInput(numParallel, 'Num Parallel'), startSettings.num_parallel],
-        ['keep_alive', keepAlive, startSettings.keep_alive],
-        ['num_batch', numBatch.trim() ? Number(numBatch) : null, startSettings.num_batch],
-        ['num_ubatch', numUbatch.trim() ? Number(numUbatch) : null, startSettings.num_ubatch],
-        ['num_thread', numThread.trim() ? Number(numThread) : null, startSettings.num_thread],
-        ['telemetry_poll_ms', parseNumericInput(pollMs, 'Telemetry Poll'), startSettings.telemetry_poll_ms],
-        ['ollama_management_mode', mgmtMode, startSettings.ollama_management_mode],
+      const candidates: Array<[keyof SettingsDraft, string, unknown, unknown]> = [
+        ['reserve', 'safety_reserve_gib', parseNumericInput(current.reserve, 'OS Memory Safety Reserve'), startSettings.safety_reserve_gib],
+        ['endpoint', 'ollama_endpoint', current.endpoint, startSettings.ollama_endpoint],
+        ['profile', 'execution_profile', current.profile, startSettings.execution_profile],
+        ['kvType', 'kv_cache_type', current.kvType, startSettings.kv_cache_type],
+        ['defaultCtx', 'default_context_length', parseNumericInput(current.defaultCtx, 'Default Context Length'), startSettings.default_context_length],
+        ['maxModels', 'max_loaded_models', parseNumericInput(current.maxModels, 'Max Loaded Models'), startSettings.max_loaded_models],
+        ['numParallel', 'num_parallel', parseNumericInput(current.numParallel, 'Num Parallel'), startSettings.num_parallel],
+        ['keepAlive', 'keep_alive', current.keepAlive, startSettings.keep_alive],
+        ['numBatch', 'num_batch', current.numBatch.trim() ? Number(current.numBatch) : null, startSettings.num_batch],
+        ['numUbatch', 'num_ubatch', current.numUbatch.trim() ? Number(current.numUbatch) : null, startSettings.num_ubatch],
+        ['numThread', 'num_thread', current.numThread.trim() ? Number(current.numThread) : null, startSettings.num_thread],
+        ['pollMs', 'telemetry_poll_ms', parseNumericInput(current.pollMs, 'Telemetry Poll'), startSettings.telemetry_poll_ms],
+        ['mgmtMode', 'ollama_management_mode', current.mgmtMode, startSettings.ollama_management_mode],
       ];
-      for (const [k, nextVal, prevVal] of candidates) {
-        if (nextVal !== prevVal) await onSaveSetting(k, nextVal);
+      for (const [field, key, nextVal, prevVal] of candidates) {
+        if (nextVal !== prevVal) {
+          await onSaveSetting(key, nextVal);
+          savedFieldValues[field] = current[field];
+        }
       }
-      succeeded = true;
       setSavedNotice('Settings saved locally to SQLite.');
     } catch (err) {
-      skipNextSyncRef.current = true;
       setErrorNotice(toErrorMessage(err));
     } finally {
       savingRef.current = false;
-      if (succeeded && latestSettingsRef.current !== startSettings) {
-        syncFromSettings(latestSettingsRef.current);
+      setSaving(false);
+      const latestDraft = snapshotToDraft(latestSettingsRef.current);
+      const prevSynced = syncedDraftRef.current;
+      const currDraft = draftRef.current;
+      const nextSynced = { ...latestDraft };
+      const nextDraft = { ...currDraft };
+      for (const field of Object.keys(latestDraft) as Array<keyof SettingsDraft>) {
+        const propChangedDuringSave = latestDraft[field] !== startDraft[field];
+        const wasSaved = field in savedFieldValues;
+        if (propChangedDuringSave && (wasSaved || currDraft[field] === prevSynced[field])) {
+          nextDraft[field] = latestDraft[field];
+          nextSynced[field] = latestDraft[field];
+        } else if (wasSaved) {
+          nextSynced[field] = savedFieldValues[field]!;
+        } else if (currDraft[field] === prevSynced[field]) {
+          nextDraft[field] = latestDraft[field];
+          nextSynced[field] = latestDraft[field];
+        }
       }
+      syncedDraftRef.current = nextSynced;
+      setDraft(nextDraft);
     }
   };
 
@@ -113,16 +153,16 @@ export function SettingsScreen({ settings, onSaveSetting }: SettingsScreenProps)
           <div className="mosaic-form-grid">
             <label className="mosaic-field">
               <span>OS Memory Safety Reserve (GiB)</span>
-              <input type="number" min={0.5} max={64} step={0.5} className="mosaic-input" value={reserve} onChange={(e) => setReserve(e.target.value)} />
+              <input type="number" min={0.5} max={64} step={0.5} className="mosaic-input" value={draft.reserve} onChange={(e) => setField('reserve', e.target.value)} />
             </label>
             <label className="mosaic-field">
               <span>Ollama Loopback Endpoint</span>
-              <input type="url" className="mosaic-input" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
+              <input type="url" className="mosaic-input" value={draft.endpoint} onChange={(e) => setField('endpoint', e.target.value)} />
             </label>
             <div className="mosaic-worker-grid">
               <label className="mosaic-field">
                 <span>Execution Profile</span>
-                <select className="mosaic-input" value={profile} onChange={(e) => setProfile(e.target.value)}>
+                <select className="mosaic-input" value={draft.profile} onChange={(e) => setField('profile', e.target.value)}>
                   <option value="auto_adaptive">auto_adaptive</option>
                   <option value="max_quality">max_quality</option>
                   <option value="balanced">balanced</option>
@@ -131,7 +171,7 @@ export function SettingsScreen({ settings, onSaveSetting }: SettingsScreenProps)
               </label>
               <label className="mosaic-field">
                 <span>KV Cache Type</span>
-                <select className="mosaic-input" value={kvType} onChange={(e) => setKvType(e.target.value)}>
+                <select className="mosaic-input" value={draft.kvType} onChange={(e) => setField('kvType', e.target.value)}>
                   <option value="auto">auto</option>
                   <option value="f16">f16</option>
                   <option value="q8_0">q8_0</option>
@@ -140,45 +180,45 @@ export function SettingsScreen({ settings, onSaveSetting }: SettingsScreenProps)
               </label>
               <label className="mosaic-field">
                 <span>Default Context Length</span>
-                <input type="number" min={512} max={131072} step={512} className="mosaic-input" value={defaultCtx} onChange={(e) => setDefaultCtx(e.target.value)} />
+                <input type="number" min={512} max={131072} step={512} className="mosaic-input" value={draft.defaultCtx} onChange={(e) => setField('defaultCtx', e.target.value)} />
               </label>
             </div>
             <div className="mosaic-worker-grid">
               <label className="mosaic-field">
                 <span>Max Loaded Models</span>
-                <input type="number" min={1} max={8} className="mosaic-input" value={maxModels} onChange={(e) => setMaxModels(e.target.value)} />
+                <input type="number" min={1} max={8} className="mosaic-input" value={draft.maxModels} onChange={(e) => setField('maxModels', e.target.value)} />
               </label>
               <label className="mosaic-field">
                 <span>Num Parallel</span>
-                <input type="number" min={1} max={8} className="mosaic-input" value={numParallel} onChange={(e) => setNumParallel(e.target.value)} />
+                <input type="number" min={1} max={8} className="mosaic-input" value={draft.numParallel} onChange={(e) => setField('numParallel', e.target.value)} />
               </label>
               <label className="mosaic-field">
                 <span>Keep Alive</span>
-                <input type="text" className="mosaic-input" value={keepAlive} onChange={(e) => setKeepAlive(e.target.value)} />
+                <input type="text" className="mosaic-input" value={draft.keepAlive} onChange={(e) => setField('keepAlive', e.target.value)} />
               </label>
             </div>
             <div className="mosaic-worker-grid">
               <label className="mosaic-field">
                 <span>Batch (optional)</span>
-                <input type="number" min={1} max={8192} className="mosaic-input" placeholder="Auto" value={numBatch} onChange={(e) => setNumBatch(e.target.value)} />
+                <input type="number" min={1} max={8192} className="mosaic-input" placeholder="Auto" value={draft.numBatch} onChange={(e) => setField('numBatch', e.target.value)} />
               </label>
               <label className="mosaic-field">
                 <span>UBatch (optional)</span>
-                <input type="number" min={1} max={8192} className="mosaic-input" placeholder="Auto" value={numUbatch} onChange={(e) => setNumUbatch(e.target.value)} />
+                <input type="number" min={1} max={8192} className="mosaic-input" placeholder="Auto" value={draft.numUbatch} onChange={(e) => setField('numUbatch', e.target.value)} />
               </label>
               <label className="mosaic-field">
                 <span>Threads (optional)</span>
-                <input type="number" min={1} max={1024} className="mosaic-input" placeholder="Auto" value={numThread} onChange={(e) => setNumThread(e.target.value)} />
+                <input type="number" min={1} max={1024} className="mosaic-input" placeholder="Auto" value={draft.numThread} onChange={(e) => setField('numThread', e.target.value)} />
               </label>
             </div>
             <div className="mosaic-worker-grid">
               <label className="mosaic-field">
                 <span>Telemetry Poll (ms)</span>
-                <input type="number" min={500} max={30000} step={500} className="mosaic-input" value={pollMs} onChange={(e) => setPollMs(e.target.value)} />
+                <input type="number" min={500} max={30000} step={500} className="mosaic-input" value={draft.pollMs} onChange={(e) => setField('pollMs', e.target.value)} />
               </label>
               <label className="mosaic-field">
                 <span>Ollama Management</span>
-                <select className="mosaic-input" value={mgmtMode} onChange={(e) => setMgmtMode(e.target.value)}>
+                <select className="mosaic-input" value={draft.mgmtMode} onChange={(e) => setField('mgmtMode', e.target.value)}>
                   <option value="managed_or_detected">managed_or_detected</option>
                   <option value="managed_only">managed_only</option>
                   <option value="external_only">external_only</option>
@@ -186,8 +226,8 @@ export function SettingsScreen({ settings, onSaveSetting }: SettingsScreenProps)
               </label>
             </div>
             <div className="mosaic-card-actions">
-              <button type="button" className="mosaic-button" onClick={() => void handleSave()}>
-                Save Settings
+              <button type="button" className="mosaic-button" disabled={saving} onClick={() => void handleSave()}>
+                {saving ? 'Saving...' : 'Save Settings'}
               </button>
             </div>
             {savedNotice && <p role="status" className="mosaic-callout mosaic-callout-success">{savedNotice}</p>}

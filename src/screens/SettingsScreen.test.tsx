@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SAMPLE_BOOTSTRAP, SAMPLE_DIAGNOSTICS } from '../test-utils/mockFixtures';
@@ -137,5 +138,64 @@ describe('SettingsScreen', () => {
     );
     expect(kaInput.value).toBe('15m');
     expect(epInput.value).toBe('http://evil.example:11434');
+  });
+
+  it('syncs external settings after partial save failure, prevents double-click saves, and rejects empty worker VRAM/RAM', async () => {
+    let releaseEndpoint!: () => void;
+    const savedCalls: Array<[string, unknown]> = [];
+
+    function StatefulParent() {
+      const [settings, setSettings] = useState(SAMPLE_BOOTSTRAP.settings);
+      const onSaveSetting = async (key: string, value: unknown) => {
+        savedCalls.push([key, value]);
+        if (key === 'safety_reserve_gib') {
+          setSettings((prev) => ({ ...prev, safety_reserve_gib: Number(value) }));
+          return;
+        }
+        if (key === 'ollama_endpoint') {
+          await new Promise<void>((resolve) => { releaseEndpoint = resolve; });
+          throw new Error('Loopback rejected');
+        }
+      };
+      return (
+        <div>
+          <button
+            type="button"
+            onClick={() => setSettings((prev) => ({ ...prev, default_context_length: 16384 }))}
+          >
+            External Refresh
+          </button>
+          <SettingsScreen settings={settings} onSaveSetting={onSaveSetting} />
+        </div>
+      );
+    }
+
+    render(<StatefulParent />);
+    const reserveInput = screen.getByLabelText('OS Memory Safety Reserve (GiB)') as HTMLInputElement;
+    const epInput = screen.getByLabelText('Ollama Loopback Endpoint') as HTMLInputElement;
+    const ctxInput = screen.getByLabelText('Default Context Length') as HTMLInputElement;
+
+    fireEvent.change(reserveInput, { target: { value: '4' } });
+    fireEvent.change(epInput, { target: { value: 'http://evil.example:11434' } });
+
+    const saveBtn = screen.getByRole('button', { name: 'Save Settings' });
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(saveBtn).toBeDisabled());
+    fireEvent.click(saveBtn);
+    expect(savedCalls.filter(([k]) => k === 'safety_reserve_gib')).toHaveLength(1);
+
+    releaseEndpoint();
+    await waitFor(() => expect(screen.getByText(/Loopback rejected/)).toBeInTheDocument());
+    expect(epInput.value).toBe('http://evil.example:11434');
+
+    fireEvent.click(screen.getByRole('button', { name: 'External Refresh' }));
+    expect(ctxInput.value).toBe('16384');
+    expect(epInput.value).toBe('http://evil.example:11434');
+
+    fireEvent.change(screen.getByLabelText('Worker VRAM GiB'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Worker RAM GiB'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Worker' }));
+    expect(screen.getByText(/must be valid numbers/i)).toBeInTheDocument();
+    expect(tauri.callsFor('add_cluster_worker')).toHaveLength(0);
   });
 });

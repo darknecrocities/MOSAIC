@@ -12,10 +12,14 @@
 .mosaic-topbar, .mosaic-statusbar {
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
   background: var(--glass-thick); -webkit-backdrop-filter: var(--blur-lg); backdrop-filter: var(--blur-lg);
-  position: relative; z-index: 2; flex-shrink: 0;
+  position: relative; z-index: 2; flex-shrink: 0; flex-wrap: wrap; min-width: 0;
 }
 .mosaic-topbar { padding: var(--space-2) var(--space-4); min-height: 56px; border-bottom: 1px solid var(--border-glass); }
-.mosaic-statusbar { padding: var(--space-1) var(--space-4); min-height: 32px; border-top: 1px solid var(--border-glass); font-size: var(--font-sm); color: var(--text-secondary); }
+.mosaic-statusbar {
+  padding: var(--space-1) var(--space-4); min-height: 32px; border-top: 1px solid var(--border-glass);
+  font-size: var(--font-sm); color: var(--text-secondary); overflow-wrap: anywhere;
+}
+.mosaic-statusbar > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .mosaic-brand { display: flex; align-items: center; gap: var(--space-2); font-weight: 700; letter-spacing: -0.02em; font-size: var(--font-lg); }
 .mosaic-topbar-meta { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .mosaic-body { flex: 1; display: flex; min-height: 0; overflow: hidden; position: relative; z-index: 1; }

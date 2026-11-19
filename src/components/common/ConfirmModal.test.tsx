@@ -48,6 +48,12 @@ describe('Dialog Accessibility (ConfirmModal & ModelShowModal)', () => {
     fireEvent.keyDown(window, { key: 'Tab' });
     expect(document.activeElement).toBe(buttons[0]);
 
+    const modalBox = dialog.firstElementChild as HTMLElement;
+    modalBox.focus();
+    expect(document.activeElement).toBe(modalBox);
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(buttons[buttons.length - 1]);
+
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(document.activeElement).toBe(trigger);

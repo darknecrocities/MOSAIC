@@ -90,4 +90,34 @@ test.describe('Tier 5 — Adversarial Overflow, Modal Stack & Focus Hardening @t
 
     tracker.assertClean();
   });
+
+  test('T5-03: statusbar wraps long library paths without horizontal overflow and Shift+Tab stays trapped from dialog text @tier5', async ({
+    page,
+  }) => {
+    const tracker = attachRuntimeErrorTracker(page);
+    await installTauriMock(page, 'connected-16gb-m3');
+    await openApp(page);
+
+    await page.evaluate(() => {
+      const e2e = window.__MOSAIC_E2E__;
+      if (e2e?.state.bootstrap.active_library) {
+        e2e.state.bootstrap.active_library.directory_path =
+          `/Volumes/ExternalDrive_${'Segment'.repeat(24)}/MOSAIC/ollama-models`;
+      }
+    });
+    await clickRescan(page);
+    await expect(page.getByText(/\/Volumes\/ExternalDrive_/)).toBeVisible();
+    await auditOverflowAndButtons(page, 'T5-03 statusbar long library path');
+
+    await navigateTo(page, 'My Models');
+    await page.getByRole('button', { name: /^Delete / }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Delete Model Weights' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByText(/Remove .* from your external Ollama model library/i).click();
+    await page.keyboard.press('Shift+Tab');
+    const trapped = await dialog.evaluate((el) => el.contains(document.activeElement));
+    expect(trapped).toBe(true);
+
+    tracker.assertClean();
+  });
 });

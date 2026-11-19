@@ -77,7 +77,7 @@ export async function auditOverflowAndButtons(page: Page, contextLabel: string):
     const containerOverflows: string[] = [];
     const containers = Array.from(
       document.querySelectorAll<HTMLElement>(
-        '.mosaic-main, .mosaic-panel, .mosaic-panel-white, .mosaic-kv, .mosaic-diagnostics-list'
+        '.mosaic-main, .mosaic-panel, .mosaic-panel-white, .mosaic-kv, .mosaic-diagnostics-list, .mosaic-statusbar, .mosaic-topbar, .mosaic-modal, .mosaic-drawer'
       )
     ).filter((el) => {
       const r = el.getBoundingClientRect();

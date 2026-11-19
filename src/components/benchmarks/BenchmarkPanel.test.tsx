@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SAMPLE_REPORTS } from '../../test-utils/mockFixtures';
 import { installTauriTestBridge } from '../../test-utils/mockTauri';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 import { BenchmarkPanel } from './BenchmarkPanel';
 
 describe('BenchmarkPanel', () => {
@@ -147,6 +148,37 @@ describe('BenchmarkPanel', () => {
 
       resolveRep2({ bottlenecks: [], efficiency_ratios: {}, recommendations: [], summary: 'Done 2' });
       await waitFor(() => expect(screen.getByText('Done 2')).toBeInTheDocument());
+    } finally {
+      errSpy.mockRestore();
+      tauri.uninstall();
+    }
+  });
+
+  it('handles null bottleneck entries safely and ErrorBoundary renders non-Error thrown strings', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tauri = installTauriTestBridge({
+      analyze_benchmark_performance: () => ({
+        bottlenecks: [null, { category: 'memory', severity: 'low', explanation: 'Tight RAM' }],
+        efficiency_ratios: {},
+        recommendations: [],
+        summary: 'Safe bottlenecks',
+      }),
+    });
+    function ThrowString(): never {
+      throw 'raw-non-error-failure';
+    }
+    try {
+      render(<BenchmarkPanel benchmarkingModel={null} onExport={vi.fn()} reports={SAMPLE_REPORTS} />);
+      fireEvent.click(screen.getByRole('button', { name: /Analyze Bottlenecks/i }));
+      await waitFor(() => expect(screen.getByText(/memory \(low\): Tight RAM/)).toBeInTheDocument());
+      expect(screen.getByText(/bottleneck: unknown/)).toBeInTheDocument();
+
+      render(
+        <ErrorBoundary>
+          <ThrowString />
+        </ErrorBoundary>
+      );
+      expect(screen.getByText('raw-non-error-failure')).toBeInTheDocument();
     } finally {
       errSpy.mockRestore();
       tauri.uninstall();

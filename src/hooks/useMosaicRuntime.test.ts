@@ -244,4 +244,42 @@ describe('useMosaicRuntime', () => {
     await waitFor(() => expect(tauri.callsFor('stop_chat_stream')).toHaveLength(1));
     expect(result.current.streaming).toBe(false);
   });
+
+  it('does not wipe another active model pullProgress when cancel_pull returns false or rejects', async () => {
+    let resolveCancel!: (ok: boolean) => void;
+    let rejectCancel!: (err: Error) => void;
+    let callCount = 0;
+    tauri.setHandler('cancel_pull', () => {
+      callCount += 1;
+      return new Promise<boolean>((resolve, reject) => {
+        if (callCount === 1) resolveCancel = resolve;
+        else rejectCancel = reject;
+      });
+    });
+
+    const { result } = renderHook(() => useMosaicRuntime());
+    await waitFor(() => expect(tauri.listenerCount('mosaic://pull-progress')).toBe(1));
+
+    act(() => {
+      tauri.emit('mosaic://pull-progress', {
+        model: 'model-a', status: 'downloading', completed: 10, total: 100, done: false, error: null,
+      });
+    });
+    act(() => { result.current.handleCancelPull('model-a'); });
+    await waitFor(() => expect(typeof resolveCancel).toBe('function'));
+    act(() => {
+      tauri.emit('mosaic://pull-progress', {
+        model: 'model-b', status: 'downloading', completed: 25, total: 100, done: false, error: null,
+      });
+    });
+    await act(async () => { resolveCancel(false); });
+    expect(result.current.pullProgress?.model).toBe('model-b');
+    expect(result.current.pullProgress?.done).toBe(false);
+
+    act(() => { result.current.handleCancelPull('model-a'); });
+    await waitFor(() => expect(typeof rejectCancel).toBe('function'));
+    await act(async () => { rejectCancel(new Error('cancel failed')); });
+    expect(result.current.pullProgress?.model).toBe('model-b');
+    expect(result.current.notice).toMatch(/cancel failed/);
+  });
 });
