@@ -10,10 +10,13 @@ use crate::core::system_probe::SystemProfile;
 use crate::security::command_guard;
 
 const GIB: u64 = 1024 * 1024 * 1024;
+type EnvList = Vec<(&'static str, String)>;
 
 #[derive(Default)]
 pub struct OllamaSupervisor {
     child: Arc<Mutex<Option<Child>>>,
+    active_env: Arc<Mutex<Option<EnvList>>>,
+    lifecycle_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn format_ollama_host(url: &reqwest::Url) -> String {
@@ -95,6 +98,14 @@ impl OllamaSupervisor {
         false
     }
 
+    pub fn active_env_matches(&self, expected: &[(&'static str, String)]) -> bool {
+        self.active_env
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .is_some_and(|current| current == expected)
+    }
+
     pub async fn start_managed(
         &self,
         endpoint: &str,
@@ -106,21 +117,27 @@ impl OllamaSupervisor {
         if !confirmed {
             return Err("Explicit confirmation is required before starting managed Ollama.".into());
         }
+        let _lifecycle = self.lifecycle_lock.lock().await;
         let envs = compute_adaptive_ollama_env(endpoint, models_dir, settings, system)?;
         let status = ollama_manager::inspect_ollama(Some(endpoint))
             .await
             .map_err(|e| e.to_string())?;
         if self.has_live_child() && status.api_reachable {
-            return Ok(status);
-        }
-        if status.api_reachable {
-            let configured_match = status.launchd_ollama_models.as_deref() == Some(models_dir)
-                || status.env_ollama_models.as_deref() == Some(models_dir);
-            if configured_match {
+            if self.active_env_matches(&envs) {
                 return Ok(status);
             }
+            self.kill_child().await;
+            for _ in 0..20 {
+                if let Ok(s) = ollama_manager::inspect_ollama(Some(endpoint)).await {
+                    if !s.api_reachable {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        } else if status.api_reachable {
             return Err(format!(
-                "Another Ollama instance is already running at {endpoint} without verified external OLLAMA_MODELS={models_dir}. Stop it first so weights never land on internal disk."
+                "Another unmanaged Ollama instance is already running at {endpoint}. Stop it first so MOSAIC can enforce OLLAMA_MODELS={models_dir} and adaptive KV/memory settings."
             ));
         }
 
@@ -130,7 +147,7 @@ impl OllamaSupervisor {
 
         let mut cmd = Command::new(&bin);
         cmd.arg("serve")
-            .envs(envs)
+            .envs(envs.iter().map(|(k, v)| (*k, v.as_str())))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -138,6 +155,9 @@ impl OllamaSupervisor {
         let child = cmd.spawn().map_err(|e| format!("Failed to spawn ollama serve: {e}"))?;
         if let Ok(mut guard) = self.child.lock() {
             *guard = Some(child);
+        }
+        if let Ok(mut guard) = self.active_env.lock() {
+            *guard = Some(envs);
         }
 
         let base_url = ollama_manager::validate_loopback_endpoint(endpoint).map_err(|e| e.to_string())?;
@@ -178,6 +198,9 @@ impl OllamaSupervisor {
     }
 
     async fn kill_child(&self) -> bool {
+        if let Ok(mut guard) = self.active_env.lock() {
+            *guard = None;
+        }
         let taken = self.child.lock().ok().and_then(|mut g| g.take());
         if let Some(mut proc_child) = taken {
             let _ = proc_child.start_kill();
@@ -188,6 +211,7 @@ impl OllamaSupervisor {
     }
 
     pub async fn stop_if_running(&self) -> bool {
+        let _lifecycle = self.lifecycle_lock.lock().await;
         if self.has_live_child() {
             return self.kill_child().await;
         }
@@ -198,6 +222,7 @@ impl OllamaSupervisor {
         if !confirmed {
             return Err("Explicit confirmation is required before stopping managed Ollama.".into());
         }
+        let _lifecycle = self.lifecycle_lock.lock().await;
         self.kill_child().await;
         ollama_manager::inspect_ollama(Some(endpoint))
             .await

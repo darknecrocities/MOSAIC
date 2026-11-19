@@ -39,6 +39,8 @@ fn collect_linux_devices(
                 let uuid = dev
                     .get("uuid")
                     .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
                     .unwrap_or(mount)
                     .to_string();
                 out.push(ExternalVolume {
@@ -89,6 +91,8 @@ pub fn parse_macos_storage_json(parsed: &serde_json::Value) -> Vec<ExternalVolum
             volume_identifier: item
                 .get("volume_uuid")
                 .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
                 .unwrap_or(mount_path)
                 .to_string(),
             label: item.get("_name").and_then(|v| v.as_str()).unwrap_or("External").to_string(),

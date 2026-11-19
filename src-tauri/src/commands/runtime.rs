@@ -1,75 +1,13 @@
 use tauri::{AppHandle, Manager, State};
 
+pub use crate::commands::runtime_state::{apply_adaptive_chat_defaults, RuntimeState};
 use crate::commands::AppState;
-use crate::core::download_manager::DownloadRegistry;
-use crate::core::inference_manager::{self, ChatStreamRequest, InferenceRegistry};
+use crate::core::cluster_manager::ClusterRuntimeRegistry;
+use crate::core::inference_manager::{self, ChatStreamRequest};
 use crate::core::migration::{self, MigrationPreview, MigrationResult};
 use crate::core::model_library::{self, InstalledModel, ModelShowDetails};
 use crate::core::ollama_manager::{self, OllamaStatus};
-use crate::core::settings_store::AppSettingsSnapshot;
 use crate::core::{system_probe, telemetry, volume_manager};
-
-pub struct RuntimeState {
-    pub downloads: DownloadRegistry,
-    pub inference: InferenceRegistry,
-}
-
-fn default_batches(profile: &str, ram_total: u64) -> (u32, u32) {
-    match profile {
-        "max_quality" => (512, 512),
-        "constrained_memory" => (128, 64),
-        "balanced" => (256, 128),
-        _ => {
-            if ram_total >= 24 * 1024_u64.pow(3) {
-                (512, 512)
-            } else {
-                (256, 128)
-            }
-        }
-    }
-}
-
-fn apply_adaptive_chat_defaults(
-    mut req: ChatStreamRequest,
-    settings: &AppSettingsSnapshot,
-    system: &system_probe::SystemProfile,
-) -> ChatStreamRequest {
-    let profile = req
-        .execution_profile
-        .as_deref()
-        .unwrap_or(&settings.execution_profile)
-        .to_string();
-    let (def_b, def_ub) = default_batches(&profile, system.ram_total_bytes);
-    if req.num_ctx.is_none() {
-        req.num_ctx = Some(settings.default_context_length);
-    }
-    if req.num_thread.is_none() {
-        req.num_thread = settings
-            .num_thread
-            .or_else(|| system.physical_cores.map(|c| c as u32));
-    }
-    if req.num_batch.is_none() {
-        req.num_batch = settings.num_batch.or(Some(def_b));
-    }
-    if req.num_ubatch.is_none() {
-        req.num_ubatch = settings.num_ubatch.or(Some(def_ub));
-    }
-    if req.use_mmap.is_none() {
-        req.use_mmap = Some(true);
-    }
-    if req.use_mlock.is_none() {
-        req.use_mlock = Some(false);
-    }
-    if req.keep_alive.is_none() {
-        let ka = if profile == "constrained_memory" {
-            "30s".to_string()
-        } else {
-            settings.keep_alive.clone()
-        };
-        req.keep_alive = Some(ka);
-    }
-    req
-}
 
 #[tauri::command]
 pub async fn pull_model(
@@ -258,15 +196,16 @@ pub async fn stop_managed_ollama(
 pub async fn prepare_safe_eject(
     state: State<'_, AppState>,
     runtime: State<'_, RuntimeState>,
+    cluster_rt: State<'_, ClusterRuntimeRegistry>,
 ) -> Result<String, String> {
     let active_library = state
         .store
         .get_active_library()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No active external library configured.".to_string())?;
-    let active_ops = runtime.downloads.has_active() || runtime.inference.is_running();
+    let active_ops = runtime.has_active_operations(&cluster_rt);
     if active_ops {
-        let msg = "Stop active model downloads or inference before ejecting.".to_string();
+        let msg = "Stop active model downloads, inference, benchmarks, migrations, or cluster runtime before ejecting.".to_string();
         let _ = telemetry::log_diagnostic(&state.store, "warn", "volume_manager", &format!("Safe eject rejected: {msg}"));
         return Err(msg);
     }

@@ -1,9 +1,34 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::security::path_guard;
+
+static MIGRATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn is_migration_active() -> bool {
+    MIGRATION_ACTIVE.load(Ordering::SeqCst)
+}
+
+pub struct MigrationActiveGuard;
+
+impl MigrationActiveGuard {
+    pub fn try_acquire() -> Result<Self, String> {
+        MIGRATION_ACTIVE
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| Self)
+            .map_err(|_| "An internal model migration is already in progress.".to_string())
+    }
+}
+
+impl Drop for MigrationActiveGuard {
+    fn drop(&mut self) {
+        MIGRATION_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationPreview {
@@ -116,6 +141,7 @@ pub fn copy_internal_models(
     if !confirmed {
         return Err("Explicit confirmation is required before migrating model files.".into());
     }
+    let _guard = MigrationActiveGuard::try_acquire()?;
     let preview = preview_internal_migration(external_free_bytes);
     if !preview.exists {
         return Err("No internal ~/.ollama/models directory found to migrate.".into());
@@ -157,8 +183,34 @@ pub fn copy_internal_models(
                 if let Some(parent) = dest.parent() {
                     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
-                if !dest.exists() {
-                    let copied = fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+                let src_len = fs::metadata(&path).map_err(|e| e.to_string())?.len();
+                let dest_matches = dest.is_file()
+                    && fs::metadata(&dest).ok().map(|m| m.len()) == Some(src_len);
+                if !dest_matches {
+                    let parent = dest.parent().unwrap_or(dest_library_dir);
+                    let tmp_path = parent.join(format!(".mosaic-tmp-{}", Uuid::new_v4()));
+                    let copied = match fs::copy(&path, &tmp_path) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            let _ = fs::remove_file(&tmp_path);
+                            return Err(e.to_string());
+                        }
+                    };
+                    let tmp_len = fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
+                    if copied != src_len || tmp_len != src_len {
+                        let _ = fs::remove_file(&tmp_path);
+                        return Err(format!(
+                            "Migration byte-count mismatch for {}: expected {src_len}, copied {copied}",
+                            rel.display()
+                        ));
+                    }
+                    if dest.exists() {
+                        let _ = fs::remove_file(&dest);
+                    }
+                    if let Err(e) = fs::rename(&tmp_path, &dest) {
+                        let _ = fs::remove_file(&tmp_path);
+                        return Err(e.to_string());
+                    }
                     files_copied += 1;
                     bytes_copied += copied;
                 }

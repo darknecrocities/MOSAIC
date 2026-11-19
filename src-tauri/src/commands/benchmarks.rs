@@ -5,6 +5,7 @@ use crate::commands::benchmark_helpers::{
     build_analyze_performance_params, compute_job_timeout_s, default_benchmark_options,
     model_names_match, resolve_effective_kv,
 };
+use crate::commands::runtime::RuntimeState;
 use crate::commands::AppState;
 use crate::core::benchmark_store::{self, BenchmarkInput, BenchmarkReportRecord};
 use crate::core::{
@@ -42,8 +43,10 @@ pub async fn run_model_benchmark(
     kv_cache_type: Option<String>,
     options: Option<serde_json::Value>,
     state: State<'_, AppState>,
+    runtime: State<'_, RuntimeState>,
 ) -> Result<BenchmarkReportRecord, String> {
     command_guard::validate_model_name(&model).map_err(|e| e.to_string())?;
+    let _bench_guard = runtime.begin_benchmark();
     let settings = state.store.get_settings().map_err(|e| e.to_string())?;
     let active_library = state.store.get_active_library().map_err(|e| e.to_string())?;
     let volumes = volume_manager::list_external_volumes().map_err(|e| e.to_string())?;

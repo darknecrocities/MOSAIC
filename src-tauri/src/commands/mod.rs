@@ -2,6 +2,7 @@ pub mod benchmark_helpers;
 pub mod benchmarks;
 pub mod cluster;
 pub mod runtime;
+pub mod runtime_state;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;

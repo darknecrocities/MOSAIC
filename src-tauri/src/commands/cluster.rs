@@ -84,7 +84,7 @@ pub async fn plan_adaptive_execution(
 }
 
 #[tauri::command]
-pub fn launch_cluster_runtime(
+pub async fn launch_cluster_runtime(
     gguf_rel_path: String,
     runtime_flags: Vec<String>,
     confirmed: bool,
@@ -96,12 +96,15 @@ pub fn launch_cluster_runtime(
         .get_active_library()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "External model library required before launching cluster runtime.".to_string())?;
-    match cluster_rt.launch_llama_server(
-        std::path::Path::new(&active_library.directory_path),
-        &gguf_rel_path,
-        &runtime_flags,
-        confirmed,
-    ) {
+    match cluster_rt
+        .launch_llama_server(
+            std::path::Path::new(&active_library.directory_path),
+            &gguf_rel_path,
+            &runtime_flags,
+            confirmed,
+        )
+        .await
+    {
         Ok(msg) => {
             let _ = telemetry::log_diagnostic(&state.store, "info", "cluster_manager", &msg);
             Ok(msg)
