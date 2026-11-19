@@ -178,7 +178,9 @@ test.describe('Tier 1 — F3 My Models & /api/show Metadata @tier1 @F3', () => {
     await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
     await navigateTo(page, 'My Models');
-    await page.getByRole('button', { name: /Inspect|Show Metadata/i }).first().click();
+    const myModels = page.getByRole('region', { name: 'My Models' });
+    await expect(myModels.getByRole('heading', { name: 'llama3.2:3b' })).toBeVisible();
+    await myModels.getByRole('button', { name: /^Inspect\s+/i }).first().click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('131072')).toBeVisible();

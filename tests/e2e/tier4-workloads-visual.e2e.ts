@@ -114,8 +114,9 @@ test.describe('Tier 4 — Real-World Workloads & Liquid Glassmorphism Visual Aud
     await expect(page.getByText('Ollama 0.40.9')).toBeVisible();
     await navigateTo(page, 'My Models');
     await page.getByRole('button', { name: 'Refresh Inventory' }).click();
-    await expect(page.getByRole('heading', { name: 'llama3.2:3b' })).toBeVisible();
-    await page.getByRole('button', { name: /Inspect|Show Metadata/i }).first().click();
+    const myModels = page.getByRole('region', { name: 'My Models' });
+    await expect(myModels.getByRole('heading', { name: 'llama3.2:3b' })).toBeVisible();
+    await myModels.getByRole('button', { name: /^Inspect\s+/i }).first().click();
     const showDialog = page.getByRole('dialog');
     await expect(showDialog).toBeVisible();
     await expect(showDialog.getByText('131072')).toBeVisible();

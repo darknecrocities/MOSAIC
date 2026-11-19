@@ -100,7 +100,9 @@ test.describe('Tier 3 — Cross-Feature Pairwise Journeys @tier3', () => {
     await installTauriMock(page, 'connected-16gb-m3');
     await openApp(page);
     await navigateTo(page, 'My Models');
-    await page.getByRole('button', { name: /Inspect|Show Metadata/i }).nth(1).click();
+    const myModels = page.getByRole('region', { name: 'My Models' });
+    await expect(myModels.getByRole('heading', { name: 'mistral:7b-instruct-q4_K_M' })).toBeVisible();
+    await myModels.getByRole('button', { name: 'Inspect mistral:7b-instruct-q4_K_M' }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     await page.getByRole('dialog').getByRole('button', { name: /Close/i }).click();
     await page.getByRole('button', { name: 'Benchmark mistral:7b-instruct-q4_K_M' }).click();

@@ -179,7 +179,9 @@ test.describe('Tier 2 — F3 My Models & /api/show Boundaries @tier2 @F3', () =>
     await openApp(page);
     await page.evaluate(() => window.__MOSAIC_E2E__?.setOllamaReachable(false));
     await navigateTo(page, 'My Models');
-    await page.getByRole('button', { name: /Inspect|Show Metadata/i }).first().click();
+    const myModels = page.getByRole('region', { name: 'My Models' });
+    await expect(myModels.getByRole('heading', { name: 'llama3.2:3b' })).toBeVisible();
+    await myModels.getByRole('button', { name: /^Inspect\s+/i }).first().click();
     await expect(page.getByText(/Failed to query \/api\/show|unreachable/i)).toBeVisible();
     tracker.assertClean();
   });
