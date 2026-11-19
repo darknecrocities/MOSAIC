@@ -27,7 +27,9 @@ def _sanitize_json_values(obj: Any) -> Any:
 
 
 def _neutralize_csv_text(text: str) -> str:
-    return f"'{text}" if text.startswith(FORMULA_PREFIXES) else text
+    if text.startswith(FORMULA_PREFIXES) or text.lstrip().startswith(FORMULA_PREFIXES):
+        return f"'{text}"
+    return text
 
 
 def _sanitize_csv_cell(val: Any) -> Any:

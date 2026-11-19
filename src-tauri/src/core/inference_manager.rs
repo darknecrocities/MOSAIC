@@ -230,10 +230,20 @@ where
         .connect_timeout(Duration::from_secs(3))
         .build()?;
     let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+    let req = client.post(&url).json(payload);
     let mut resp = tokio::select! {
         biased;
         _ = wait_cancelled(cancel_rx) => return Ok(ChatOutcome::Cancelled),
-        res = client.post(&url).json(payload).send() => res?,
+        res = tokio::time::timeout(chunk_timeout, req.send()) => match res {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) if e.is_timeout() => return Err(InferenceError::RemoteError(
+                "Chat request timed out waiting for Ollama response headers.".into(),
+            )),
+            Ok(Err(e)) => return Err(InferenceError::Http(e)),
+            Err(_) => return Err(InferenceError::RemoteError(
+                "Chat request timed out waiting for Ollama response headers.".into(),
+            )),
+        },
     };
 
     if !resp.status().is_success() {

@@ -3,15 +3,51 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from typing import Any
 
 from mosaic_analytics.execution_planner import GIB
 from mosaic_analytics.numeric import safe_int
 
+_AWS_IPV6_IMDS = ipaddress.IPv6Address("fd00:ec2::254")
+_IPV6_LOOPBACK = ipaddress.IPv6Address("::1")
+_IPV4_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
+_HOST_CHARS_RE = re.compile(r"^[A-Za-z0-9.-]+$")
+
+
+def _is_blocked_v4(v4: ipaddress.IPv4Address) -> bool:
+    return (
+        v4.is_link_local
+        or v4.is_unspecified
+        or v4.is_multicast
+        or v4.is_reserved
+        or v4 == _IPV4_BROADCAST
+    )
+
+
+def _is_non_canonical_ip_hostname(host: str) -> bool:
+    segs = host.split(".")
+    if not segs or any(not s for s in segs):
+        return True
+    return all(
+        s.isdigit()
+        or (
+            (s.startswith("0x") or s.startswith("0X"))
+            and len(s) > 2
+            and all(c in "0123456789abcdefABCDEF" for c in s[2:])
+        )
+        for s in segs
+    )
+
 
 def _is_blocked_worker_host(host: str) -> bool:
-    clean = host.strip().strip("[]").rstrip(".")
-    if not clean:
+    raw = host.strip()
+    if not raw or any(ch.isspace() for ch in raw):
+        return True
+    bracketed = raw.startswith("[") and raw.endswith("]")
+    clean = raw[1:-1] if bracketed else raw
+    clean = clean.rstrip(".")
+    if not clean or len(clean) > 253 or "%" in clean:
         return True
     lower = clean.lower()
     if (
@@ -23,20 +59,27 @@ def _is_blocked_worker_host(host: str) -> bool:
     try:
         ip = ipaddress.ip_address(clean)
     except ValueError:
-        return False
+        if bracketed or "[" in raw or "]" in raw:
+            return True
+        if clean.startswith("-") or clean.startswith(".") or ".." in clean:
+            return True
+        if not _HOST_CHARS_RE.fullmatch(clean):
+            return True
+        return _is_non_canonical_ip_hostname(clean)
+
     if isinstance(ip, ipaddress.IPv4Address):
-        return ip.is_link_local or ip.is_unspecified or ip.is_multicast
-    v4_mapped = ip.ipv4_mapped
-    if v4_mapped is not None and (
-        v4_mapped.is_link_local or v4_mapped.is_unspecified or v4_mapped.is_multicast
-    ):
+        return True if bracketed else _is_blocked_v4(ip)
+
+    if ip == _AWS_IPV6_IMDS or ip.is_link_local or ip.is_unspecified or ip.is_multicast:
         return True
-    return (
-        ip.is_link_local
-        or ip.is_unspecified
-        or ip.is_multicast
-        or clean.lower() == "fd00:ec2::254"
-    )
+    v4_mapped = ip.ipv4_mapped
+    if v4_mapped is not None and _is_blocked_v4(v4_mapped):
+        return True
+    if ip != _IPV6_LOOPBACK and int(ip) < 2**32:
+        v4_compat = ipaddress.IPv4Address(ip.packed[-4:])
+        if _is_blocked_v4(v4_compat) or v4_compat.is_loopback or v4_compat.is_private:
+            return True
+    return False
 
 
 def _format_endpoint(host: str, port: int) -> str:

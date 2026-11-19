@@ -51,6 +51,7 @@ def _validate_loopback(endpoint: str) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or not clean_path
+        or bool(parsed.params)
         or bool(parsed.query)
         or bool(parsed.fragment)
     ):
@@ -254,6 +255,10 @@ def run_benchmark(params: dict[str, Any], ctx: JobContext) -> dict[str, Any]:
             body,
             timeout_s=cold_timeout_s if idx == 0 else warm_timeout_s,
         )
+        if not isinstance(res, dict):
+            raise RuntimeError("Ollama /api/generate returned a non-object JSON payload.")
+        if res.get("error"):
+            raise RuntimeError(str(res["error"]))
         load_ms = safe_float(res.get("load_duration"), 0.0) / 1e6
         prompt_eval_ms = safe_float(res.get("prompt_eval_duration"), 0.0) / 1e6
         eval_ns = safe_float(res.get("eval_duration"), 0.0)

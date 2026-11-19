@@ -58,7 +58,7 @@ def resolve_effective_ram_avail(hardware: dict[str, Any]) -> int:
 
     if bool(hardware.get("probe_psutil")) or not has_explicit_nonneg:
         return cap(max(rust_avail, int(psutil.virtual_memory().available)))
-    return max(0, rust_avail)
+    return cap(rust_avail)
 
 
 def resolve_memory_budget(

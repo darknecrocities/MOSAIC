@@ -12,6 +12,7 @@ import pytest
 from mosaic_analytics import (
     benchmark_runner,
     cluster_planner,
+    cluster_rpc,
     execution_planner,
     hardware_analyzer,
     model_fit_analyzer,
@@ -37,6 +38,8 @@ def test_report_exporter_neutralizes_csv_formulas_and_handles_nondict_and_nan() 
                 "at": "@SUM(A1)",
                 "tab": "\t=1",
                 "cr": "\r=2",
+                "lead_space": " =CMD('calc')",
+                "lead_nl": "\n=CMD('calc')",
             },
         },
         _ctx(),
@@ -48,6 +51,8 @@ def test_report_exporter_neutralizes_csv_formulas_and_handles_nondict_and_nan() 
     assert "at,'@SUM(A1)" in content
     assert "'\t=1" in content
     assert "'\r=2" in content
+    assert "' =CMD('calc')" in content
+    assert "'\n=CMD('calc')" in content
 
     for bad_report in (["a", "b"], "oops", 123):
         with pytest.raises(ValueError, match="dictionary"):
@@ -282,3 +287,52 @@ def test_hardware_analyzer_nvidia_smi_comma_in_gpu_name(monkeypatch: pytest.Monk
     assert gpus[0]["model"] == "NVIDIA H100, PCIe"
     assert gpus[0]["vram_total_bytes"] == 81559 * 1024**2
     assert gpus[0]["vram_free_bytes"] == 80000 * 1024**2
+
+
+def test_cluster_rpc_blocks_canonical_imds_v4compat_noncanonical_and_injection_hosts() -> None:
+    for blocked in (
+        "fd00:0ec2::254",
+        "fd00:ec2:0:0:0:0:0:254",
+        "::169.254.169.254",
+        "::127.0.0.1",
+        "2852039166",
+        "0xa9fea9fe",
+        "0251.0376.0251.0376",
+        "127.0.0.1:50052,169.254.169.254:80",
+        "-evil",
+        "bad host",
+    ):
+        assert cluster_rpc._is_blocked_worker_host(blocked) is True, f"must block {blocked}"
+    for allowed in ("::1", "0:0:0:0:0:0:0:1", "127.0.0.1", "192.168.1.50", "mac-studio.local"):
+        assert cluster_rpc._is_blocked_worker_host(allowed) is False, f"must allow {allowed}"
+
+
+def test_benchmark_runner_raises_on_ollama_error_or_nondict_and_execution_planner_caps_avail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert (
+        execution_planner.resolve_effective_ram_avail(
+            {
+                "is_unified_memory": False,
+                "ram_total_bytes": 8 * GIB,
+                "ram_available_bytes": 64 * GIB,
+            }
+        )
+        == 8 * GIB
+    )
+    with pytest.raises(ValueError, match="loopback"):
+        benchmark_runner._validate_loopback("http://127.0.0.1:11434/;matrix=1")
+
+    for bad_res in ({"error": "model 'missing:latest' not found"}, ["not-a-dict"]):
+
+        def _fake_post(
+            _u: str, p: dict[str, Any], timeout_s: float = 60.0, r: Any = bad_res
+        ) -> Any:
+            return {"done": True} if p.get("keep_alive") == 0 else r
+
+        monkeypatch.setattr(benchmark_runner, "_post_json", _fake_post)
+        with pytest.raises(RuntimeError):
+            benchmark_runner.run_benchmark(
+                {"endpoint": "http://127.0.0.1:11434", "model": "missing:latest", "repetitions": 2},
+                _ctx(),
+            )

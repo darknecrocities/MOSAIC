@@ -252,10 +252,22 @@ where
         .connect_timeout(Duration::from_secs(3))
         .build()?;
     let url = format!("{}/api/pull", base_url.trim_end_matches('/'));
+    let req = client
+        .post(&url)
+        .json(&serde_json::json!({ "model": model, "stream": true }));
     let mut resp = tokio::select! {
         biased;
         _ = wait_cancelled(cancel_rx) => return Ok(PullOutcome::Cancelled),
-        res = client.post(&url).json(&serde_json::json!({ "model": model, "stream": true })).send() => res?,
+        res = tokio::time::timeout(chunk_timeout, req.send()) => match res {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) if e.is_timeout() => return Err(DownloadError::RemoteError(
+                "Pull request timed out waiting for Ollama response headers.".into(),
+            )),
+            Ok(Err(e)) => return Err(DownloadError::Http(e)),
+            Err(_) => return Err(DownloadError::RemoteError(
+                "Pull request timed out waiting for Ollama response headers.".into(),
+            )),
+        },
     };
 
     if !resp.status().is_success() {
