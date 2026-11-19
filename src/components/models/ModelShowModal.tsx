@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useDialogAccessibility } from '../../hooks/useDialogAccessibility';
 import type { ModelShowDetails } from '../../types/ipc';
 
 interface ModelShowModalProps {
@@ -20,14 +21,8 @@ export function ModelShowModal({
   details,
   onClose,
 }: ModelShowModalProps) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const modalRef = useRef<HTMLDivElement>(null);
+  useDialogAccessibility({ open, dialogRef: modalRef, onClose });
 
   if (!open) return null;
 
@@ -39,7 +34,7 @@ export function ModelShowModal({
       aria-labelledby="model-show-title"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="mosaic-modal">
+      <div ref={modalRef} tabIndex={-1} className="mosaic-modal">
         <div className="mosaic-panel-header">
           <h2 id="model-show-title">Model Metadata: {modelName ?? ''}</h2>
           <button

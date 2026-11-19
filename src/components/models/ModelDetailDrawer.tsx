@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, Layers, X } from 'lucide-react';
+import { useDialogAccessibility } from '../../hooks/useDialogAccessibility';
 import type { CatalogModelWithFit, ClusterPlan } from '../../types/ipc';
 import { formatGiB } from '../../utils/format';
 import { mosaicApi } from '../../utils/mosaicApi';
@@ -30,37 +31,50 @@ export function ModelDetailDrawer({
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
   const [confirmAdaptivePull, setConfirmAdaptivePull] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const planReqIdRef = useRef(0);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    planReqIdRef.current += 1;
     setClusterPlan(null);
+    setPlanning(false);
     setPlanError(null);
     setConfirmAdaptivePull(false);
   }, [item?.model.ollama_name]);
 
-  useEffect(() => {
-    if (!item) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [item, onClose]);
+  useDialogAccessibility({ open: Boolean(item), dialogRef: drawerRef, onClose });
 
   if (!item) return null;
   const { model, fit } = item;
   const enoughSpace = freeBytes >= model.download_size_bytes * 1.1;
   const isPulling = pullingName === model.ollama_name;
   const plan = fit.execution_plan;
+  const formatOptGiB = (val: number | null | undefined) =>
+    typeof val === 'number' && Number.isFinite(val) ? formatGiB(val) : 'Unknown';
 
   const handleComputePlan = async () => {
+    const reqId = ++planReqIdRef.current;
     setPlanning(true);
     setPlanError(null);
     try {
-      setClusterPlan(await mosaicApi.planAdaptiveExecution(model.ollama_name, fit.context_length));
+      const nextPlan = await mosaicApi.planAdaptiveExecution(model.ollama_name, fit.context_length);
+      if (mountedRef.current && planReqIdRef.current === reqId) {
+        setClusterPlan(nextPlan);
+      }
     } catch (err) {
-      setPlanError(toErrorMessage(err, 'Cluster planner requires Tauri runtime.'));
+      if (mountedRef.current && planReqIdRef.current === reqId) {
+        setPlanError(toErrorMessage(err, 'Cluster planner requires Tauri runtime.'));
+      }
     } finally {
-      setPlanning(false);
+      if (mountedRef.current && planReqIdRef.current === reqId) {
+        setPlanning(false);
+      }
     }
   };
 
@@ -72,7 +86,7 @@ export function ModelDetailDrawer({
       aria-labelledby="detail-drawer-title"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="mosaic-drawer">
+      <div ref={drawerRef} tabIndex={-1} className="mosaic-drawer">
         <div className="mosaic-panel-header">
           <div>
             <h2 id="detail-drawer-title">{model.display_name}</h2>
@@ -103,19 +117,19 @@ export function ModelDetailDrawer({
         <div className="mosaic-stack-sm">
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">Weight Memory</span>
-            <span className="mosaic-num">{fit.weight_memory_estimate ? formatGiB(fit.weight_memory_estimate) : 'Unknown'}</span>
+            <span className="mosaic-num">{formatOptGiB(fit.weight_memory_estimate)}</span>
           </div>
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">KV Cache ({fit.context_length} ctx)</span>
-            <span className="mosaic-num">{fit.kv_cache_estimate ? formatGiB(fit.kv_cache_estimate) : 'Unknown'}</span>
+            <span className="mosaic-num">{formatOptGiB(fit.kv_cache_estimate)}</span>
           </div>
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">Runtime Overhead</span>
-            <span className="mosaic-num">{fit.runtime_overhead_estimate ? formatGiB(fit.runtime_overhead_estimate) : 'Unknown'}</span>
+            <span className="mosaic-num">{formatOptGiB(fit.runtime_overhead_estimate)}</span>
           </div>
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">Safe Memory Budget</span>
-            <span className="mosaic-num">{fit.available_budget ? formatGiB(fit.available_budget) : 'Unknown'}</span>
+            <span className="mosaic-num">{formatOptGiB(fit.available_budget)}</span>
           </div>
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">Expected Backend</span>
@@ -148,8 +162,8 @@ export function ModelDetailDrawer({
             </div>
             {plan.warnings.length > 0 && (
               <ul className="mosaic-list">
-                {plan.warnings.map((w) => (
-                  <li key={w} className="mosaic-subtitle">{w}</li>
+                {plan.warnings.map((w, idx) => (
+                  <li key={`${w}-${idx}`} className="mosaic-subtitle">{w}</li>
                 ))}
               </ul>
             )}
@@ -157,11 +171,11 @@ export function ModelDetailDrawer({
         )}
 
         <ul className="mosaic-list">
-          {fit.reasons.map((reason) => (
-            <li key={reason} className="mosaic-subtitle">{reason}</li>
+          {fit.reasons.map((reason, idx) => (
+            <li key={`${reason}-${idx}`} className="mosaic-subtitle">{reason}</li>
           ))}
-          {(fit.limitations ?? []).map((lim) => (
-            <li key={lim} className="mosaic-subtitle">{lim}</li>
+          {(fit.limitations ?? []).map((lim, idx) => (
+            <li key={`${lim}-${idx}`} className="mosaic-subtitle">{lim}</li>
           ))}
         </ul>
 

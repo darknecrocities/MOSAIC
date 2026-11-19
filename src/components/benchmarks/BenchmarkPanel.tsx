@@ -11,13 +11,21 @@ interface BenchmarkPanelProps {
   onExport: (reportId: string, format: 'json' | 'csv' | 'html') => void;
 }
 
+function formatMetric(value: number | null | undefined, suffix: string): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value}${suffix}` : 'n/a';
+}
+
+function formatSeconds(ms: number | null | undefined): string {
+  return typeof ms === 'number' && Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : 'n/a';
+}
+
 export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: BenchmarkPanelProps) {
   const [analyses, setAnalyses] = useState<Record<string, PerformanceAnalysisReport>>({});
-  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [analyzingIds, setAnalyzingIds] = useState<Record<string, boolean>>({});
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const handleAnalyze = async (reportId: string) => {
-    setAnalyzingId(reportId);
+    setAnalyzingIds((prev) => ({ ...prev, [reportId]: true }));
     setAnalysisError(null);
     try {
       const report = await mosaicApi.analyzeBenchmarkPerformance(reportId);
@@ -25,7 +33,11 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
     } catch (err) {
       setAnalysisError(toErrorMessage(err, 'Benchmark analysis failed.'));
     } finally {
-      setAnalyzingId(null);
+      setAnalyzingIds((prev) => {
+        const next = { ...prev };
+        delete next[reportId];
+        return next;
+      });
     }
   };
 
@@ -54,42 +66,49 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
         <div className="mosaic-stack-sm">
           {reports.map((r) => {
             const analysis = analyses[r.id];
-            const recommendations = analysis?.recommendations ?? analysis?.suggestions ?? [];
+            const bottlenecks = Array.isArray(analysis?.bottlenecks) ? analysis.bottlenecks : [];
+            const recommendations = Array.isArray(analysis?.recommendations)
+              ? analysis.recommendations
+              : Array.isArray(analysis?.suggestions)
+                ? analysis.suggestions
+                : [];
             const ratios =
               analysis?.efficiency_ratios ??
               (analysis?.efficiency_ratio != null ? { efficiency: analysis.efficiency_ratio } : null);
+            const isAnalyzing = Boolean(analyzingIds[r.id]);
 
             return (
               <div key={r.id} className="mosaic-panel-white">
                 <div className="mosaic-panel-header">
                   <strong>{r.model_name}</strong>
                   <span className="mosaic-num mosaic-metric-lg">
-                    {r.tok_per_sec_median !== null ? `${r.tok_per_sec_median} tok/s` : 'n/a'}
+                    {formatMetric(r.tok_per_sec_median, ' tok/s')}
                   </span>
                 </div>
                 <div className="mosaic-kv">
                   <span className="mosaic-kv-label">Cold / Warm Load</span>
                   <span className="mosaic-num">
-                    {r.cold_load_ms !== null ? `${(r.cold_load_ms / 1000).toFixed(1)}s` : 'n/a'} /{' '}
-                    {r.warm_load_ms !== null ? `${r.warm_load_ms} ms` : 'n/a'}
+                    {formatSeconds(r.cold_load_ms)} / {formatMetric(r.warm_load_ms, ' ms')}
                   </span>
                 </div>
                 <div className="mosaic-kv">
                   <span className="mosaic-kv-label">TTFT Median / Peak RAM</span>
                   <span className="mosaic-num">
-                    {r.ttft_median_ms !== null ? `${r.ttft_median_ms} ms` : 'n/a'} /{' '}
-                    {r.peak_ram_bytes ? formatGiB(r.peak_ram_bytes) : 'n/a'}
+                    {formatMetric(r.ttft_median_ms, ' ms')} /{' '}
+                    {typeof r.peak_ram_bytes === 'number' && Number.isFinite(r.peak_ram_bytes)
+                      ? formatGiB(r.peak_ram_bytes)
+                      : 'n/a'}
                   </span>
                 </div>
                 <div className="mosaic-card-actions">
                   <button
                     type="button"
                     className="mosaic-button-secondary"
-                    disabled={analyzingId === r.id}
+                    disabled={isAnalyzing}
                     onClick={() => void handleAnalyze(r.id)}
                   >
                     <Activity size={13} aria-hidden="true" />
-                    <span>{analyzingId === r.id ? 'Analyzing...' : 'Analyze Bottlenecks'}</span>
+                    <span>{isAnalyzing ? 'Analyzing...' : 'Analyze Bottlenecks'}</span>
                   </button>
                   {(['json', 'csv', 'html'] as const).map((fmt) => (
                     <button
@@ -116,9 +135,9 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
                             <span className="mosaic-num">{String(v)}</span>
                           </div>
                         ))}
-                    {analysis.bottlenecks.length > 0 && (
+                    {bottlenecks.length > 0 && (
                       <ul className="mosaic-list">
-                        {analysis.bottlenecks.map((b, idx) => {
+                        {bottlenecks.map((b, idx) => {
                           const label = b.category ?? b.component ?? b.type ?? 'bottleneck';
                           const severity = b.severity ? ` (${String(b.severity)})` : '';
                           const detail =
@@ -133,8 +152,8 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
                     )}
                     {recommendations.length > 0 && (
                       <ul className="mosaic-list">
-                        {recommendations.map((rec) => (
-                          <li key={rec} className="mosaic-subtitle">{rec}</li>
+                        {recommendations.map((rec, idx) => (
+                          <li key={`${rec}-${idx}`} className="mosaic-subtitle">{rec}</li>
                         ))}
                       </ul>
                     )}

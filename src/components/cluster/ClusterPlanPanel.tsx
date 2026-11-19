@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Layers, Network, Play, Square } from 'lucide-react';
 import type { ClusterPlan } from '../../types/ipc';
 import { formatGiB } from '../../utils/format';
@@ -32,6 +32,12 @@ export function ClusterPlanPanel({ plan }: { plan: ClusterPlan }) {
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setRuntimeNotice(null);
+    setRuntimeError(false);
+    setConfirmLaunch(false);
+  }, [plan]);
 
   const ggufWarning = validateGgufRelPath(ggufRelPath);
 
@@ -113,8 +119,8 @@ export function ClusterPlanPanel({ plan }: { plan: ClusterPlan }) {
 
       {plan.warnings.length > 0 && (
         <ul className="mosaic-list">
-          {plan.warnings.map((w) => (
-            <li key={w} className="mosaic-subtitle">{w}</li>
+          {plan.warnings.map((w, idx) => (
+            <li key={`${w}-${idx}`} className="mosaic-subtitle">{w}</li>
           ))}
         </ul>
       )}
