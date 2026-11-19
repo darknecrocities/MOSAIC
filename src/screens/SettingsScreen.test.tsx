@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SAMPLE_BOOTSTRAP } from '../test-utils/mockFixtures';
+import { SAMPLE_BOOTSTRAP, SAMPLE_DIAGNOSTICS } from '../test-utils/mockFixtures';
 import { installTauriTestBridge, type TauriTestController } from '../test-utils/mockTauri';
 import { SettingsScreen } from './SettingsScreen';
 
@@ -89,5 +89,53 @@ describe('SettingsScreen', () => {
       />
     );
     expect(reserveInput.value).toBe('64');
+  });
+
+  it('preserves unsaved edits on partial failure, allows empty numeric input while typing, and ignores stale DiagnosticsLogPanel responses', async () => {
+    let resolveSlow!: (val: unknown) => void;
+    tauri.setHandler('get_diagnostics', (args) => {
+      if (args.limit === 200) return new Promise((r) => { resolveSlow = r; });
+      if (args.limit === 20) {
+        return [{ id: 'fresh', severity: 'info', component: 'ui', message: 'FRESH_20_MSG', created_at: '2026-11-18T10:02:00Z' }];
+      }
+      return SAMPLE_DIAGNOSTICS;
+    });
+
+    const onSaveSetting = vi.fn().mockImplementation(async (key: string) => {
+      if (key === 'ollama_endpoint') throw new Error('Loopback rejected');
+    });
+    const { rerender } = render(
+      <SettingsScreen settings={SAMPLE_BOOTSTRAP.settings} onSaveSetting={onSaveSetting} />
+    );
+
+    const limitSelect = screen.getByLabelText('Diagnostics limit');
+    fireEvent.change(limitSelect, { target: { value: '200' } });
+    fireEvent.change(limitSelect, { target: { value: '20' } });
+    await waitFor(() => expect(screen.getByText('FRESH_20_MSG')).toBeInTheDocument());
+    resolveSlow([{ id: 'stale', severity: 'warn', component: 'ui', message: 'STALE_200_MSG', created_at: '2026-11-18T10:00:00Z' }]);
+    await waitFor(() => expect(screen.queryByText('STALE_200_MSG')).not.toBeInTheDocument());
+
+    const ctxInput = screen.getByLabelText('Default Context Length') as HTMLInputElement;
+    fireEvent.change(ctxInput, { target: { value: '' } });
+    expect(ctxInput.value).toBe('');
+    fireEvent.change(ctxInput, { target: { value: '8192' } });
+
+    const reserveInput = screen.getByLabelText('OS Memory Safety Reserve (GiB)') as HTMLInputElement;
+    const epInput = screen.getByLabelText('Ollama Loopback Endpoint') as HTMLInputElement;
+    const kaInput = screen.getByLabelText('Keep Alive') as HTMLInputElement;
+    fireEvent.change(reserveInput, { target: { value: '4' } });
+    fireEvent.change(epInput, { target: { value: 'http://evil.example:11434' } });
+    fireEvent.change(kaInput, { target: { value: '15m' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+    await waitFor(() => expect(screen.getByText(/Loopback rejected/)).toBeInTheDocument());
+    rerender(
+      <SettingsScreen
+        settings={{ ...SAMPLE_BOOTSTRAP.settings, safety_reserve_gib: 4 }}
+        onSaveSetting={onSaveSetting}
+      />
+    );
+    expect(kaInput.value).toBe('15m');
+    expect(epInput.value).toBe('http://evil.example:11434');
   });
 });

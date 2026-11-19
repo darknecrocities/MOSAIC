@@ -173,4 +173,75 @@ describe('useMosaicRuntime', () => {
     expect(result.current.streaming).toBe(true);
     expect(result.current.notice).toBeNull();
   });
+
+  it('prevents stale handleRefreshCatalog overwrite, clears pull on cancel=false, guards rapid double send, calls stop_chat_stream on new session, and refreshes catalog on volume change', async () => {
+    let resolveRefresh!: (val: unknown) => void;
+    tauri.setHandler('refresh_model_catalog', () => new Promise((r) => { resolveRefresh = r; }));
+    tauri.setHandler('list_catalog_with_fit', (args) => [
+      {
+        model: {
+          ollama_name: `ctx-${args.contextLength}-${args.executionProfile}`,
+          display_name: `Model ${args.contextLength}`,
+          provider: 'Test', parameter_billions: 1, quantization: 'Q4_K_M',
+          download_size_bytes: 1000, n_layers: 8, n_kv_heads: 4, head_dim: 64,
+          default_context: 4096, license_name: 'MIT', license_url: 'https://example.invalid', summary: 's',
+        },
+        fit: {
+          fit_status: 'Recommended', weight_memory_estimate: 1000, runtime_overhead_estimate: 100,
+          kv_cache_estimate: 100, total_estimated_bytes: 1200, available_budget: 8000,
+          context_length: Number(args.contextLength), expected_backend: 'unified_metal',
+          performance_estimate: 'fast', reasons: ['ok'], source: 'test', confidence: 'high',
+        },
+      },
+    ]);
+
+    const { result } = renderHook(() => useMosaicRuntime());
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+
+    act(() => { result.current.setRoute('discover'); });
+    await waitFor(() => expect(result.current.catalog[0]?.model.ollama_name).toBe('ctx-4096-auto_adaptive'));
+
+    let refreshPromise!: Promise<void>;
+    act(() => { refreshPromise = result.current.handleRefreshCatalog(); });
+    act(() => {
+      result.current.setContextLength(32768);
+      result.current.setExecutionProfile('constrained_memory');
+    });
+    await waitFor(() => expect(result.current.catalog[0]?.model.ollama_name).toBe('ctx-32768-constrained_memory'));
+
+    await act(async () => {
+      resolveRefresh({ count: 1, source_url: 'https://example.invalid', refreshed_at: 'now' });
+      await refreshPromise;
+    });
+    expect(result.current.catalog[0]?.model.ollama_name).toBe('ctx-32768-constrained_memory');
+
+    const beforeSelectCalls = tauri.callsFor('list_catalog_with_fit').length;
+    await act(async () => { await result.current.handleSelectVolume('VOL-SSD-2'); });
+    expect(tauri.callsFor('list_catalog_with_fit').length).toBeGreaterThan(beforeSelectCalls);
+
+    tauri.setHandler('cancel_pull', () => false);
+    act(() => {
+      tauri.emit('mosaic://pull-progress', {
+        model: 'qwen3:30b-a3b', status: 'downloading', completed: 10, total: 100, done: false, error: null,
+      });
+    });
+    expect(result.current.pullProgress?.done).toBe(false);
+    act(() => { result.current.handleCancelPull('qwen3:30b-a3b'); });
+    await waitFor(() => expect(result.current.pullProgress?.done).toBe(true));
+
+    const opts = {
+      numCtx: 4096, temperature: 0.2, executionProfile: 'auto_adaptive' as const,
+      kvCacheType: 'auto' as const, numGpu: null, keepAlive: '5m',
+    };
+    act(() => {
+      void result.current.handleSendMessage('First message', opts);
+      void result.current.handleSendMessage('Second message', opts);
+    });
+    expect(result.current.messages).toEqual([{ role: 'user', content: 'First message' }]);
+    await waitFor(() => expect(tauri.callsFor('start_chat_stream')).toHaveLength(1));
+
+    act(() => { result.current.handleNewSession(); });
+    await waitFor(() => expect(tauri.callsFor('stop_chat_stream')).toHaveLength(1));
+    expect(result.current.streaming).toBe(false);
+  });
 });
