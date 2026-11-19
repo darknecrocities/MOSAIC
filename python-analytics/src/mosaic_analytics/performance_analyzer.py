@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from mosaic_analytics.execution_planner import resolve_adaptive_kv_label
 from mosaic_analytics.numeric import safe_float, safe_int, safe_optional_float
 from mosaic_analytics.protocol import JobContext
 
@@ -138,21 +139,24 @@ def analyze_performance(params: dict[str, Any], _ctx: JobContext) -> dict[str, A
             or applied_kv
             or "f16"
         ).lower()
+        raw_ctx = report.get("context_length")
+        if raw_ctx is None:
+            raw_ctx = execution_plan.get("num_ctx")
+        ctx_len = safe_int(raw_ctx, 4096)
         if kv_type == "auto":
             prof = str(
                 execution_plan.get("execution_profile")
                 or execution_plan.get("profile")
                 or params.get("execution_profile")
-                or ""
+                or "auto_adaptive"
             ).lower()
-            if prof == "constrained_memory":
-                kv_type = "q4_0"
-            elif prof == "balanced":
-                kv_type = "q8_0"
-        raw_ctx = report.get("context_length")
-        if raw_ctx is None:
-            raw_ctx = execution_plan.get("num_ctx")
-        ctx_len = safe_int(raw_ctx, 4096)
+            raw_avail = hardware.get("ram_effective_avail_bytes")
+            if raw_avail is None:
+                raw_avail = hardware.get("ram_available_bytes")
+            ram_avail = safe_int(raw_avail, int(ram_total))
+            kv_type = resolve_adaptive_kv_label(
+                prof, "auto", int(ram_total), ram_avail, ctx_len
+            )
         if kv_type == "f16" and ((mem_util is not None and mem_util > 0.70) or ctx_len >= 8192):
             bottlenecks.append(
                 {

@@ -139,10 +139,14 @@ def plan_cluster(params: dict[str, Any], _ctx: JobContext) -> dict[str, Any]:
         tier3_mmap = max(0, remaining_after_gpu - tier2_ram)
 
     if should_offload_exps_cpu:
-        runtime_flags.extend(["-ot", "exps=CPU", "-ngl", "999"])
+        runtime_flags.extend(["-ot", "exps=CPU"])
+        if local_fast_tier > 0:
+            runtime_flags.extend(["-ngl", "999"])
+        else:
+            runtime_flags.append("--mmap")
         strategy = "single_node_moe_offload"
     elif tier3_mmap == 0:
-        runtime_flags.extend(["-ngl", "999"])
+        runtime_flags.extend(["-ngl", "999"] if local_fast_tier > 0 else ["--mmap"])
         strategy = "single_node_full_fit"
     else:
         runtime_flags.extend(["--mmap"])

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { DiagnosticEntry } from '../../types/ipc';
 import { formatTimestamp } from '../../utils/format';
@@ -10,17 +10,32 @@ export function DiagnosticsLogPanel() {
   const [limit, setLimit] = useState<number>(50);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const reqIdRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const loadLogs = useCallback(async (nextLimit: number) => {
     if (!isTauriRuntime()) return;
+    const reqId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
-      setEntries(await mosaicApi.getDiagnostics(nextLimit));
+      const next = await mosaicApi.getDiagnostics(nextLimit);
+      if (mountedRef.current && reqIdRef.current === reqId) {
+        setEntries(next);
+      }
     } catch (err) {
-      setError(toErrorMessage(err, 'Failed to load diagnostics.'));
+      if (mountedRef.current && reqIdRef.current === reqId) {
+        setError(toErrorMessage(err, 'Failed to load diagnostics.'));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && reqIdRef.current === reqId) {
+        setLoading(false);
+      }
     }
   }, []);
 

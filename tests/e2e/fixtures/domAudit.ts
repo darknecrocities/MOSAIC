@@ -74,11 +74,30 @@ export async function auditOverflowAndButtons(page: Page, contextLabel: string):
         }
       }
     }
-    return { docOverflow, bodyOverflow, oversized, undersized, overlaps };
+    const containerOverflows: string[] = [];
+    const containers = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '.mosaic-main, .mosaic-panel, .mosaic-panel-white, .mosaic-kv, .mosaic-diagnostics-list'
+      )
+    ).filter((el) => {
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+    });
+    for (const el of containers) {
+      if (el.scrollWidth > el.clientWidth + 1) {
+        containerOverflows.push(
+          `${el.className || el.tagName} (${el.scrollWidth} > ${el.clientWidth})`
+        );
+      }
+    }
+
+    return { docOverflow, bodyOverflow, containerOverflows, oversized, undersized, overlaps };
   });
 
   expect(report.docOverflow, `${contextLabel}: documentElement horizontal overflow`).toBe(false);
   expect(report.bodyOverflow, `${contextLabel}: body horizontal overflow`).toBe(false);
+  expect(report.containerOverflows, `${contextLabel}: inner container horizontal overflow`).toEqual([]);
   expect(report.oversized, `${contextLabel}: buttons > 280px`).toEqual([]);
   expect(report.undersized, `${contextLabel}: buttons < 40px`).toEqual([]);
   expect(report.overlaps, `${contextLabel}: overlapping buttons`).toEqual([]);

@@ -2,43 +2,19 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::commands::AppState;
-use crate::core::{ollama_manager, telemetry};
+pub use crate::core::download_types::{
+    process_pull_line, DownloadError, PullOutcome, PullProgressEvent,
+};
 use crate::core::settings_store::ActiveLibraryRecord;
+use crate::core::stream_lines::LineByteBuffer;
+use crate::core::{ollama_manager, telemetry};
 use crate::security::command_guard;
 
-#[derive(Debug, Error)]
-pub enum DownloadError {
-    #[error("external model library is not connected or configured")]
-    ExternalDriveRequired,
-    #[error("pull already in progress for model: {0}")]
-    AlreadyInProgress(String),
-    #[error("insufficient free space on external drive: required {required} bytes, available {available} bytes")]
-    InsufficientSpace { required: u64, available: u64 },
-    #[error("security validation failed: {0}")]
-    Security(#[from] crate::security::SecurityError),
-    #[error("ollama endpoint error: {0}")]
-    Ollama(#[from] ollama_manager::OllamaError),
-    #[error("http error: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("pull failed: {0}")]
-    RemoteError(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PullProgressEvent {
-    pub model: String,
-    pub status: String,
-    pub completed: Option<u64>,
-    pub total: Option<u64>,
-    pub done: bool,
-    pub error: Option<String>,
-}
+const DEFAULT_PULL_CHUNK_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct ActiveDownload {
     run_id: u64,
@@ -56,11 +32,6 @@ struct DownloadState {
 #[derive(Default)]
 pub struct DownloadRegistry {
     active: Arc<Mutex<DownloadState>>,
-}
-
-pub enum PullOutcome {
-    Completed { emitted_done: bool },
-    Cancelled,
 }
 
 impl DownloadRegistry {
@@ -130,6 +101,31 @@ impl DownloadRegistry {
         estimated_bytes: Option<u64>,
         active_library: Option<ActiveLibraryRecord>,
         library_connected: bool,
+        emit: F,
+    ) -> Result<(), DownloadError>
+    where
+        F: FnMut(PullProgressEvent) + Send + 'static,
+    {
+        self.start_pull_with_sink_and_timeout(
+            endpoint,
+            model,
+            estimated_bytes,
+            active_library,
+            library_connected,
+            DEFAULT_PULL_CHUNK_TIMEOUT,
+            emit,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_pull_with_sink_and_timeout<F>(
+        &self,
+        endpoint: String,
+        model: String,
+        estimated_bytes: Option<u64>,
+        active_library: Option<ActiveLibraryRecord>,
+        library_connected: bool,
+        chunk_timeout: Duration,
         mut emit: F,
     ) -> Result<(), DownloadError>
     where
@@ -192,7 +188,7 @@ impl DownloadRegistry {
             let outcome = if *cancel_rx.borrow() {
                 Ok(PullOutcome::Cancelled)
             } else {
-                stream_pull(base_url.as_str(), &model, &mut cancel_rx, &mut emit).await
+                stream_pull(base_url.as_str(), &model, chunk_timeout, &mut cancel_rx, &mut emit).await
             };
             match outcome {
                 Ok(PullOutcome::Cancelled) => {
@@ -205,17 +201,16 @@ impl DownloadRegistry {
                         error: Some("Pull cancelled by user.".into()),
                     });
                 }
-                Ok(PullOutcome::Completed { emitted_done }) => {
-                    if !emitted_done {
-                        emit(PullProgressEvent {
-                            model: model.clone(),
-                            status: "success".into(),
-                            completed: None,
-                            total: None,
-                            done: true,
-                            error: None,
-                        });
-                    }
+                Ok(PullOutcome::Completed { emitted_done: true }) => {}
+                Ok(PullOutcome::Completed { emitted_done: false }) => {
+                    emit(PullProgressEvent {
+                        model: model.clone(),
+                        status: "error".into(),
+                        completed: None,
+                        total: None,
+                        done: true,
+                        error: Some("Pull stream ended unexpectedly before completion.".into()),
+                    });
                 }
                 Err(err) => {
                     emit(PullProgressEvent {
@@ -246,6 +241,7 @@ async fn wait_cancelled(rx: &mut watch::Receiver<bool>) {
 async fn stream_pull<F>(
     base_url: &str,
     model: &str,
+    chunk_timeout: Duration,
     cancel_rx: &mut watch::Receiver<bool>,
     emit: &mut F,
 ) -> Result<PullOutcome, DownloadError>
@@ -266,43 +262,37 @@ where
         return Err(DownloadError::RemoteError(format!("HTTP {}", resp.status())));
     }
 
-    let mut buffer = String::new();
+    let mut line_buf = LineByteBuffer::default();
     let mut emitted_done = false;
     loop {
         let chunk = tokio::select! {
             biased;
             _ = wait_cancelled(cancel_rx) => return Ok(PullOutcome::Cancelled),
-            res = resp.chunk() => res?,
+            res = tokio::time::timeout(chunk_timeout, resp.chunk()) => match res {
+                Ok(Ok(chunk)) => chunk,
+                Ok(Err(e)) if e.is_timeout() => return Err(DownloadError::RemoteError(
+                    "Pull stream timed out waiting for Ollama chunk.".into(),
+                )),
+                Ok(Err(e)) => return Err(DownloadError::Http(e)),
+                Err(_) => return Err(DownloadError::RemoteError(
+                    "Pull stream timed out waiting for Ollama chunk.".into(),
+                )),
+            },
         };
         let Some(chunk) = chunk else {
+            if let Some(tail) = line_buf.flush_remaining() {
+                process_pull_line(&tail, model, &mut emitted_done, emit)?;
+            }
             break;
         };
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(idx) = buffer.find('\n') {
-            let line = buffer[..idx].trim().to_string();
-            buffer.drain(..=idx);
-            if line.is_empty() {
-                continue;
-            }
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
-                    return Err(DownloadError::RemoteError(err.to_string()));
-                }
-                let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string();
-                let done = status == "success";
-                if done {
-                    emitted_done = true;
-                }
-                emit(PullProgressEvent {
-                    model: model.to_string(),
-                    status,
-                    completed: val.get("completed").and_then(|v| v.as_u64()),
-                    total: val.get("total").and_then(|v| v.as_u64()),
-                    done,
-                    error: None,
-                });
-            }
+        for line in line_buf.push_chunk(&chunk) {
+            process_pull_line(&line, model, &mut emitted_done, emit)?;
         }
+    }
+    if !emitted_done {
+        return Err(DownloadError::RemoteError(
+            "Pull stream ended unexpectedly before completion.".into(),
+        ));
     }
     Ok(PullOutcome::Completed { emitted_done })
 }

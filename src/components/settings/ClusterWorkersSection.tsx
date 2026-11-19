@@ -9,9 +9,9 @@ export function ClusterWorkersSection() {
   const [workers, setWorkers] = useState<ClusterWorker[]>([]);
   const [workerName, setWorkerName] = useState('');
   const [workerHost, setWorkerHost] = useState('127.0.0.1');
-  const [workerPort, setWorkerPort] = useState(50052);
-  const [workerVram, setWorkerVram] = useState(24);
-  const [workerRam, setWorkerRam] = useState(16);
+  const [workerPort, setWorkerPort] = useState('50052');
+  const [workerVram, setWorkerVram] = useState('24');
+  const [workerRam, setWorkerRam] = useState('16');
   const [allowLan, setAllowLan] = useState(false);
   const [clusterNotice, setClusterNotice] = useState<string | null>(null);
 
@@ -29,13 +29,20 @@ export function ClusterWorkersSection() {
   const handleAddWorker = async () => {
     setClusterNotice(null);
     if (!isTauriRuntime()) return;
+    const port = Number(workerPort);
+    const vram = Number(workerVram);
+    const ram = Number(workerRam);
+    if (!workerPort.trim() || !Number.isFinite(port) || !Number.isFinite(vram) || !Number.isFinite(ram)) {
+      setClusterNotice('Worker port, VRAM, and RAM must be valid numbers.');
+      return;
+    }
     try {
       await mosaicApi.addClusterWorker({
         name: workerName || workerHost,
         host: workerHost,
-        port: workerPort,
-        vram_gib: workerVram,
-        ram_gib: workerRam,
+        port,
+        vram_gib: vram,
+        ram_gib: ram,
         backend: 'ggml_rpc',
         allow_lan: allowLan,
       });
@@ -110,7 +117,7 @@ export function ClusterWorkersSection() {
             className="mosaic-input"
             aria-label="Worker port"
             value={workerPort}
-            onChange={(e) => setWorkerPort(Number(e.target.value))}
+            onChange={(e) => setWorkerPort(e.target.value)}
           />
         </label>
         <label className="mosaic-field">
@@ -120,7 +127,7 @@ export function ClusterWorkersSection() {
             className="mosaic-input"
             aria-label="Worker VRAM GiB"
             value={workerVram}
-            onChange={(e) => setWorkerVram(Number(e.target.value))}
+            onChange={(e) => setWorkerVram(e.target.value)}
           />
         </label>
         <label className="mosaic-field">
@@ -130,7 +137,7 @@ export function ClusterWorkersSection() {
             className="mosaic-input"
             aria-label="Worker RAM GiB"
             value={workerRam}
-            onChange={(e) => setWorkerRam(Number(e.target.value))}
+            onChange={(e) => setWorkerRam(e.target.value)}
           />
         </label>
         <button type="button" className="mosaic-button" onClick={() => void handleAddWorker()}>

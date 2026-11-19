@@ -156,8 +156,8 @@ export function HardwareScreen({ state }: { state: AppBootstrapState }) {
           )}
           {insights.limitations.length > 0 && (
             <ul className="mosaic-list">
-              {insights.limitations.map((item) => (
-                <li key={item} className="mosaic-subtitle">{item}</li>
+              {insights.limitations.map((item, idx) => (
+                <li key={`${item}-${idx}`} className="mosaic-subtitle">{item}</li>
               ))}
             </ul>
           )}

@@ -1,71 +1,18 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::commands::AppState;
-use crate::core::{ollama_manager, settings_policy, telemetry};
+pub use crate::core::inference_types::{
+    build_ollama_chat_payload, ChatMessage, ChatStreamRequest, ChatTokenEvent, InferenceError,
+};
+use crate::core::stream_lines::LineByteBuffer;
+use crate::core::{ollama_manager, telemetry};
 use crate::security::command_guard;
 
-#[derive(Debug, Error)]
-pub enum InferenceError {
-    #[error("external model library is required before running models")]
-    ExternalDriveRequired,
-    #[error("security validation failed: {0}")]
-    Security(#[from] crate::security::SecurityError),
-    #[error("ollama endpoint error: {0}")]
-    Ollama(#[from] ollama_manager::OllamaError),
-    #[error("invalid inference option: {0}")]
-    InvalidOption(String),
-    #[error("http error: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("inference error: {0}")]
-    RemoteError(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ChatTokenEvent {
-    pub session_id: String,
-    pub token: String,
-    pub done: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChatStreamRequest {
-    pub session_id: String,
-    pub model: String,
-    pub messages: Vec<ChatMessage>,
-    pub num_ctx: Option<u32>,
-    pub temperature: Option<f32>,
-    #[serde(default)]
-    pub execution_profile: Option<String>,
-    #[serde(default)]
-    pub kv_cache_type: Option<String>,
-    #[serde(default)]
-    pub num_gpu: Option<i32>,
-    #[serde(default)]
-    pub num_batch: Option<u32>,
-    #[serde(default)]
-    pub num_ubatch: Option<u32>,
-    #[serde(default)]
-    pub num_thread: Option<u32>,
-    #[serde(default)]
-    pub use_mmap: Option<bool>,
-    #[serde(default)]
-    pub use_mlock: Option<bool>,
-    #[serde(default)]
-    pub keep_alive: Option<String>,
-}
+const DEFAULT_CHAT_CHUNK_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct ActiveInference {
     run_id: u64,
@@ -88,45 +35,6 @@ pub struct InferenceRegistry {
 enum ChatOutcome {
     Completed { sent_done: bool },
     Cancelled,
-}
-
-pub fn build_ollama_chat_payload(req: &ChatStreamRequest) -> Result<serde_json::Value, InferenceError> {
-    let mut options = serde_json::Map::new();
-    let num_ctx = req.num_ctx.unwrap_or(4096).clamp(512, 131_072);
-    let temperature = req.temperature.unwrap_or(0.2).clamp(0.0, 2.0);
-    options.insert("num_ctx".into(), serde_json::json!(num_ctx));
-    options.insert("temperature".into(), serde_json::json!(temperature));
-    if let Some(ngl) = req.num_gpu {
-        options.insert("num_gpu".into(), serde_json::json!(ngl.clamp(0, 999)));
-    }
-    if let Some(nb) = req.num_batch {
-        options.insert("num_batch".into(), serde_json::json!(nb.clamp(1, 8192)));
-    }
-    if let Some(nub) = req.num_ubatch {
-        options.insert("num_ubatch".into(), serde_json::json!(nub.clamp(1, 8192)));
-    }
-    if let Some(nt) = req.num_thread {
-        options.insert("num_thread".into(), serde_json::json!(nt.clamp(1, 1024)));
-    }
-    if let Some(mmap) = req.use_mmap {
-        options.insert("use_mmap".into(), serde_json::json!(mmap));
-    }
-    if let Some(mlock) = req.use_mlock {
-        options.insert("use_mlock".into(), serde_json::json!(mlock));
-    }
-
-    let mut body = serde_json::json!({
-        "model": req.model,
-        "messages": req.messages,
-        "stream": true,
-        "options": serde_json::Value::Object(options),
-    });
-    if let Some(ref ka) = req.keep_alive {
-        let valid_ka = settings_policy::validate_keep_alive(ka)
-            .map_err(InferenceError::InvalidOption)?;
-        body["keep_alive"] = serde_json::json!(valid_ka);
-    }
-    Ok(body)
 }
 
 impl InferenceRegistry {
@@ -176,6 +84,26 @@ impl InferenceRegistry {
         endpoint: String,
         req: ChatStreamRequest,
         library_connected: bool,
+        emit: F,
+    ) -> Result<(), InferenceError>
+    where
+        F: FnMut(ChatTokenEvent) + Send + 'static,
+    {
+        self.start_chat_with_sink_and_timeout(
+            endpoint,
+            req,
+            library_connected,
+            DEFAULT_CHAT_CHUNK_TIMEOUT,
+            emit,
+        )
+    }
+
+    pub fn start_chat_with_sink_and_timeout<F>(
+        &self,
+        endpoint: String,
+        req: ChatStreamRequest,
+        library_connected: bool,
+        chunk_timeout: Duration,
         mut emit: F,
     ) -> Result<(), InferenceError>
     where
@@ -224,7 +152,7 @@ impl InferenceRegistry {
             let outcome = if *cancel_rx.borrow() {
                 Ok(ChatOutcome::Cancelled)
             } else {
-                stream_chat(base_url.as_str(), &sid, &payload, &mut cancel_rx, &mut emit).await
+                stream_chat(base_url.as_str(), &sid, &payload, chunk_timeout, &mut cancel_rx, &mut emit).await
             };
             let terminal_err = match outcome {
                 Ok(ChatOutcome::Cancelled) => Some(None),
@@ -254,10 +182,44 @@ async fn wait_cancelled(rx: &mut watch::Receiver<bool>) {
     let _ = rx.wait_for(|v| *v).await;
 }
 
+fn process_chat_line<F>(
+    line: &str,
+    session_id: &str,
+    sent_done: &mut bool,
+    emit: &mut F,
+) -> Result<(), InferenceError>
+where
+    F: FnMut(ChatTokenEvent),
+{
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+        if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
+            return Err(InferenceError::RemoteError(err.to_string()));
+        }
+        let token = val
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        let done = val.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
+        if done {
+            *sent_done = true;
+        }
+        emit(ChatTokenEvent {
+            session_id: session_id.to_string(),
+            token,
+            done,
+            error: None,
+        });
+    }
+    Ok(())
+}
+
 async fn stream_chat<F>(
     base_url: &str,
     session_id: &str,
     payload: &serde_json::Value,
+    chunk_timeout: Duration,
     cancel_rx: &mut watch::Receiver<bool>,
     emit: &mut F,
 ) -> Result<ChatOutcome, InferenceError>
@@ -278,46 +240,37 @@ where
         return Err(InferenceError::RemoteError(format!("HTTP {}", resp.status())));
     }
 
-    let mut buffer = String::new();
+    let mut line_buf = LineByteBuffer::default();
     let mut sent_done = false;
     loop {
         let chunk = tokio::select! {
             biased;
             _ = wait_cancelled(cancel_rx) => return Ok(ChatOutcome::Cancelled),
-            res = resp.chunk() => res?,
+            res = tokio::time::timeout(chunk_timeout, resp.chunk()) => match res {
+                Ok(Ok(chunk)) => chunk,
+                Ok(Err(e)) if e.is_timeout() => return Err(InferenceError::RemoteError(
+                    "Chat stream timed out waiting for Ollama response.".into(),
+                )),
+                Ok(Err(e)) => return Err(InferenceError::Http(e)),
+                Err(_) => return Err(InferenceError::RemoteError(
+                    "Chat stream timed out waiting for Ollama response.".into(),
+                )),
+            },
         };
         let Some(chunk) = chunk else {
+            if let Some(tail) = line_buf.flush_remaining() {
+                process_chat_line(&tail, session_id, &mut sent_done, emit)?;
+            }
             break;
         };
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(idx) = buffer.find('\n') {
-            let line = buffer[..idx].trim().to_string();
-            buffer.drain(..=idx);
-            if line.is_empty() {
-                continue;
-            }
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
-                    return Err(InferenceError::RemoteError(err.to_string()));
-                }
-                let token = val
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let done = val.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
-                if done {
-                    sent_done = true;
-                }
-                emit(ChatTokenEvent {
-                    session_id: session_id.to_string(),
-                    token,
-                    done,
-                    error: None,
-                });
-            }
+        for line in line_buf.push_chunk(&chunk) {
+            process_chat_line(&line, session_id, &mut sent_done, emit)?;
         }
+    }
+    if !sent_done {
+        return Err(InferenceError::RemoteError(
+            "Chat stream ended unexpectedly before completion.".into(),
+        ));
     }
     Ok(ChatOutcome::Completed { sent_done })
 }

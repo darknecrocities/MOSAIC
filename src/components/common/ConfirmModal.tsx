@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useDialogAccessibility } from '../../hooks/useDialogAccessibility';
 
 interface ConfirmModalProps {
   open: boolean;
@@ -22,6 +24,9 @@ export function ConfirmModal({
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const modalRef = useRef<HTMLDivElement>(null);
+  useDialogAccessibility({ open, dialogRef: modalRef, onClose: onCancel });
+
   if (!open) return null;
 
   const modal = (
@@ -30,8 +35,9 @@ export function ConfirmModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-modal-title"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
     >
-      <div className="mosaic-modal">
+      <div ref={modalRef} tabIndex={-1} className="mosaic-modal">
         <div className="mosaic-panel-header">
           <h2 id="confirm-modal-title">{title}</h2>
           <button

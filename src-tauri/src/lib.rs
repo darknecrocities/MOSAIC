@@ -8,8 +8,6 @@ use tauri::Manager;
 use crate::commands::runtime::RuntimeState;
 use crate::commands::AppState;
 use crate::core::cluster_manager::ClusterRuntimeRegistry;
-use crate::core::download_manager::DownloadRegistry;
-use crate::core::inference_manager::InferenceRegistry;
 use crate::core::ollama_manager::{self, OllamaStatus};
 use crate::core::ollama_supervisor::OllamaSupervisor;
 use crate::core::python_analytics_service::{self, AnalyticsHealth};
@@ -68,10 +66,7 @@ pub fn run() {
                 store,
                 ollama: OllamaSupervisor::default(),
             });
-            app.manage(RuntimeState {
-                downloads: DownloadRegistry::default(),
-                inference: InferenceRegistry::default(),
-            });
+            app.manage(RuntimeState::default());
             app.manage(ClusterRuntimeRegistry::default());
             Ok(())
         })

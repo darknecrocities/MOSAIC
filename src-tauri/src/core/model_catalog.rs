@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::catalog_security::{self, MAX_CATALOG_BYTES};
 use crate::core::python_analytics_service;
 use crate::core::settings_store::SettingsStore;
 use crate::core::system_probe::{self, SystemProfile};
@@ -9,7 +10,6 @@ use crate::security::command_guard;
 
 const CURATED_CATALOG_JSON: &str = include_str!("catalog_data.json");
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-const MAX_CATALOG_BYTES: usize = 2 * 1024 * 1024;
 pub const DEFAULT_CATALOG_REFRESH_URL: &str =
     "https://raw.githubusercontent.com/darknecrocities/mosaic/main/src-tauri/src/core/catalog_data.json";
 
@@ -121,25 +121,9 @@ pub fn load_effective_catalog(store: Option<&SettingsStore>) -> Vec<CatalogModel
     load_curated_catalog()
 }
 
-/// Optional HTTPS catalog refresh with strict TLS scheme, userinfo, size, and schema checks.
+/// Optional HTTPS catalog refresh with strict SSRF, redirect, size, and schema checks.
 pub async fn refresh_catalog_https(url: &str) -> Result<Vec<CatalogModelEntry>, String> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
-    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() || !parsed.has_host() {
-        return Err("Catalog refresh URL must be a valid https:// URL without userinfo.".into());
-    }
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(3))
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client.get(parsed).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("Catalog refresh HTTP {}", resp.status()));
-    }
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_CATALOG_BYTES {
-        return Err("Catalog refresh payload exceeds 2 MiB safety limit.".into());
-    }
+    let bytes = catalog_security::fetch_public_https_bounded(url, MAX_CATALOG_BYTES).await?;
     let entries: Vec<CatalogModelEntry> =
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid catalog schema: {e}"))?;
     validate_catalog_entries(&entries)?;

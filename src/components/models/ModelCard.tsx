@@ -52,7 +52,9 @@ export function ModelCard({
         <div className="mosaic-kv">
           <span className="mosaic-kv-label">Est. Runtime Memory</span>
           <span className="mosaic-num">
-            {fit.total_estimated_bytes ? formatGiB(fit.total_estimated_bytes) : 'Unknown'}
+            {typeof fit.total_estimated_bytes === 'number' && Number.isFinite(fit.total_estimated_bytes)
+              ? formatGiB(fit.total_estimated_bytes)
+              : 'Unknown'}
           </span>
         </div>
         {fit.execution_plan && (

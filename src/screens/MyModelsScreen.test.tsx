@@ -70,4 +70,44 @@ describe('MyModelsScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete Model' }));
     expect(onDeleteModel).toHaveBeenCalledWith(modelName);
   });
+
+  it('ignores stale show_model_details response when inspecting a second model', async () => {
+    let resolveFirst!: (val: unknown) => void;
+    let callIdx = 0;
+    tauri.setHandler('show_model_details', (args) => {
+      callIdx += 1;
+      if (callIdx === 1) return new Promise((r) => { resolveFirst = r; });
+      return { ...SAMPLE_SHOW_DETAILS, model: String(args.model), license: 'MIT-FRESH' };
+    });
+
+    const models = [
+      SAMPLE_MODELS[0],
+      { ...SAMPLE_MODELS[0], name: 'model-b:30b' },
+    ];
+    render(
+      <MyModelsScreen
+        models={models}
+        reports={SAMPLE_REPORTS}
+        loading={false}
+        libraryConnected={true}
+        benchmarkingModel={null}
+        onRefresh={vi.fn()}
+        onLaunchModel={vi.fn()}
+        onRunBenchmark={vi.fn()}
+        onExportReport={vi.fn()}
+        onDeleteModel={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: `Inspect ${models[0].name}` }));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect model-b:30b' }));
+    await waitFor(() => expect(screen.getByText('MIT-FRESH')).toBeInTheDocument());
+
+    resolveFirst({ ...SAMPLE_SHOW_DETAILS, license: 'LICENSE-A-STALE' });
+    await waitFor(() => {
+      expect(screen.queryByText('LICENSE-A-STALE')).not.toBeInTheDocument();
+      expect(screen.getByText('MIT-FRESH')).toBeInTheDocument();
+    });
+  });
 });

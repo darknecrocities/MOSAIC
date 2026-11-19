@@ -33,18 +33,19 @@
 .mosaic-nav-btn:hover { background: var(--glass-ultra-thin); color: var(--text-primary); }
 .mosaic-nav-btn[aria-current='page'] { background: var(--accent-surface); border-color: var(--accent-border); color: var(--text-primary); font-weight: 600; }
 .mosaic-main { flex: 1; overflow-y: auto; min-width: 0; }
-.mosaic-content { width: 100%; max-width: 1440px; margin: 0 auto; padding: var(--space-4); display: grid; gap: var(--space-3); align-content: start; }
+.mosaic-content { width: 100%; max-width: 1440px; margin: 0 auto; padding: var(--space-4); display: grid; gap: var(--space-3); align-content: start; min-width: 0; }
 
 .mosaic-panel, .mosaic-panel-white {
   -webkit-backdrop-filter: var(--blur-md); backdrop-filter: var(--blur-md);
   border: 1px solid var(--border-glass); border-radius: var(--radius-md); padding: var(--space-3);
-  box-shadow: var(--shadow-card); container-type: inline-size;
+  box-shadow: var(--shadow-card); container-type: inline-size; min-width: 0; overflow-wrap: anywhere;
 }
 .mosaic-panel { background: var(--glass-thin); }
 .mosaic-panel-white { background: var(--glass-regular); }
-.mosaic-panel-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
-.mosaic-panel-header h2, .mosaic-panel-header h3 { margin: 0; font-size: var(--font-lg); font-weight: 600; letter-spacing: -0.025em; }
-.mosaic-subtitle { color: var(--text-secondary); font-size: var(--font-sm); margin: 0; }
+.mosaic-panel-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); min-width: 0; flex-wrap: wrap; }
+.mosaic-panel-header > * { min-width: 0; overflow-wrap: anywhere; }
+.mosaic-panel-header h2, .mosaic-panel-header h3 { margin: 0; font-size: var(--font-lg); font-weight: 600; letter-spacing: -0.025em; overflow-wrap: anywhere; word-break: break-word; }
+.mosaic-subtitle { color: var(--text-secondary); font-size: var(--font-sm); margin: 0; overflow-wrap: anywhere; }
 .mosaic-inline-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .mosaic-card-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: var(--space-2); margin-top: var(--space-3); }
 .mosaic-row-end { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-3); }
@@ -125,17 +126,18 @@
 .mosaic-progress::-webkit-progress-value { background: var(--accent-primary); border-radius: 999px; }
 .mosaic-progress::-moz-progress-bar { background: var(--accent-primary); border-radius: 999px; }
 
-.mosaic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-3); }
-.mosaic-workstation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); }
-.mosaic-settings-grid, .mosaic-run-workspace, .mosaic-form-grid { display: grid; gap: var(--space-3); }
+.mosaic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: var(--space-3); min-width: 0; }
+.mosaic-workstation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: var(--space-3); min-width: 0; }
+.mosaic-settings-grid, .mosaic-run-workspace, .mosaic-form-grid { display: grid; gap: var(--space-3); min-width: 0; }
 .mosaic-kv {
-  display: flex; justify-content: space-between; align-items: center; gap: var(--space-2);
-  padding: 6px 0; border-bottom: 1px solid var(--border-glass);
+  display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  padding: 6px 0; border-bottom: 1px solid var(--border-glass); min-width: 0;
 }
+.mosaic-kv > * { min-width: 0; overflow-wrap: anywhere; }
 .mosaic-kv:last-child { border-bottom: none; }
 .mosaic-kv-label { color: var(--text-secondary); font-size: var(--font-sm); }
-.mosaic-diagnostics-list { display: grid; gap: var(--space-2); max-height: 440px; overflow-y: auto; margin-top: var(--space-2); }
-.mosaic-diagnostics-row { padding: var(--space-2); border-radius: var(--radius-sm); border: 1px solid var(--border-glass); background: var(--glass-ultra-thin); font-size: var(--font-sm); }
+.mosaic-diagnostics-list { display: grid; gap: var(--space-2); max-height: 440px; overflow-y: auto; margin-top: var(--space-2); min-width: 0; }
+.mosaic-diagnostics-row { padding: var(--space-2); border-radius: var(--radius-sm); border: 1px solid var(--border-glass); background: var(--glass-ultra-thin); font-size: var(--font-sm); min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 
 .mosaic-modal-backdrop, .mosaic-drawer-backdrop {
   position: fixed; inset: 0; background: var(--glass-backdrop); -webkit-backdrop-filter: blur(8px);

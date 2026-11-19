@@ -1,23 +1,19 @@
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::TcpStream;
-use tokio::process::{Child, Command};
 use uuid::Uuid;
 
 pub use crate::core::cluster_flags::{
     scan_gguf_files, validate_gguf_path, validate_llama_extra_flags, validate_worker_host,
 };
+pub use crate::core::cluster_runtime::ClusterRuntimeRegistry;
 use crate::core::model_catalog::CatalogModelEntry;
 use crate::core::python_analytics_service;
 use crate::core::settings_store::{SettingsStore, StoreError};
 use crate::core::system_probe::{self, SystemProfile};
-use crate::security::command_guard;
 
 #[derive(Debug, Error)]
 pub enum ClusterError {
@@ -222,76 +218,6 @@ pub async fn compute_cluster_plan(
     }
     serde_json::from_value::<ClusterPlan>(env.payload["value"].clone())
         .map_err(|e| format!("invalid cluster plan payload: {e}"))
-}
-
-#[derive(Default)]
-pub struct ClusterRuntimeRegistry {
-    child: Arc<Mutex<Option<Child>>>,
-}
-
-impl ClusterRuntimeRegistry {
-    pub fn stop(&self) -> bool {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(mut proc_child) = guard.take() {
-                let _ = proc_child.start_kill();
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        let _ = proc_child.wait().await;
-                    });
-                } else {
-                    let _ = proc_child.try_wait();
-                }
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn launch_llama_server(
-        &self,
-        library_root: &Path,
-        gguf_rel_path: &str,
-        extra_flags: &[String],
-        confirmed: bool,
-    ) -> Result<String, String> {
-        if !confirmed {
-            return Err("Explicit confirmation required before launching llama-server.".into());
-        }
-        let model_path = validate_gguf_path(library_root, gguf_rel_path)?;
-        let safe_flags = validate_llama_extra_flags(extra_flags)?;
-
-        let bin = [
-            "/opt/homebrew/bin/llama-server",
-            "/usr/local/bin/llama-server",
-            "/usr/bin/llama-server",
-        ]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|p| p.is_file())
-        .ok_or_else(|| {
-            "llama-server binary not found. Install llama.cpp to launch experimental MoE/RPC mode.".to_string()
-        })?;
-        command_guard::validate_allowed_binary(&bin).map_err(|e| e.to_string())?;
-
-        self.stop();
-        let mut cmd = Command::new(&bin);
-        cmd.arg("-m")
-            .arg(&model_path)
-            .arg("--host")
-            .arg("127.0.0.1")
-            .arg("--port")
-            .arg("11435")
-            .args(&safe_flags)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        let child = cmd.spawn().map_err(|e| e.to_string())?;
-        if let Ok(mut guard) = self.child.lock() {
-            *guard = Some(child);
-        }
-        Ok("Experimental llama-server started on http://127.0.0.1:11435".into())
-    }
 }
 
 #[cfg(test)]

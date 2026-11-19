@@ -101,4 +101,55 @@ describe('BenchmarkPanel', () => {
       tauri.uninstall();
     }
   });
+
+  it('handles NaN/0 metrics, missing bottlenecks, duplicate recommendations, and concurrent per-report analysis', async () => {
+    let resolveRep1!: (val: unknown) => void;
+    let resolveRep2!: (val: unknown) => void;
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tauri = installTauriTestBridge({
+      analyze_benchmark_performance: (args) => {
+        if (args.reportId === 'rep-1') return new Promise((r) => { resolveRep1 = r; });
+        return new Promise((r) => { resolveRep2 = r; });
+      },
+    });
+    const reports = [
+      {
+        ...SAMPLE_REPORTS[0],
+        id: 'rep-1',
+        tok_per_sec_median: Number.NaN,
+        cold_load_ms: undefined as unknown as null,
+        peak_ram_bytes: 0,
+      },
+      { ...SAMPLE_REPORTS[0], id: 'rep-2', model_name: 'qwen2.5:0.5b' },
+    ];
+
+    try {
+      render(<BenchmarkPanel benchmarkingModel={null} onExport={vi.fn()} reports={reports} />);
+      expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+      expect(screen.getByText(/0\.0 GiB/)).toBeInTheDocument();
+
+      const btns = screen.getAllByRole('button', { name: /Analyze Bottlenecks/i });
+      fireEvent.click(btns[0]);
+      fireEvent.click(btns[1]);
+
+      expect(screen.getAllByRole('button', { name: /Analyzing/i })).toHaveLength(2);
+      await waitFor(() => expect(typeof resolveRep1).toBe('function'));
+      await waitFor(() => expect(typeof resolveRep2).toBe('function'));
+      resolveRep1({
+        efficiency_ratios: { memory_bandwidth_utilization: 0.5 },
+        recommendations: ['Duplicate tip', 'Duplicate tip'],
+        summary: 'Partial report',
+      });
+
+      await waitFor(() => expect(screen.getByText('Partial report')).toBeInTheDocument());
+      expect(screen.getAllByRole('button', { name: /Analyzing/i })).toHaveLength(1);
+      expect(errSpy).not.toHaveBeenCalled();
+
+      resolveRep2({ bottlenecks: [], efficiency_ratios: {}, recommendations: [], summary: 'Done 2' });
+      await waitFor(() => expect(screen.getByText('Done 2')).toBeInTheDocument());
+    } finally {
+      errSpy.mockRestore();
+      tauri.uninstall();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileText, Gauge, Play, Trash2 } from 'lucide-react';
 import { BenchmarkPanel } from '../components/benchmarks/BenchmarkPanel';
 import { ConfirmModal } from '../components/common/ConfirmModal';
@@ -42,6 +42,13 @@ export function MyModelsScreen({
   const [showDetails, setShowDetails] = useState<ModelShowDetails | null>(null);
   const [showLoading, setShowLoading] = useState(false);
   const [showError, setShowError] = useState<string | null>(null);
+  const inspectReqIdRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const parsedReps = Number(benchRepsRaw);
   const benchReps = Number.isFinite(parsedReps) && benchRepsRaw.trim() !== ''
@@ -49,16 +56,24 @@ export function MyModelsScreen({
     : 2;
 
   const handleInspectModel = async (name: string) => {
+    const reqId = ++inspectReqIdRef.current;
     setShowTarget(name);
     setShowDetails(null);
     setShowError(null);
     setShowLoading(true);
     try {
-      setShowDetails(await mosaicApi.showModelDetails(name));
+      const details = await mosaicApi.showModelDetails(name);
+      if (mountedRef.current && inspectReqIdRef.current === reqId) {
+        setShowDetails(details);
+      }
     } catch (err) {
-      setShowError(toErrorMessage(err, 'Failed to inspect model metadata.'));
+      if (mountedRef.current && inspectReqIdRef.current === reqId) {
+        setShowError(toErrorMessage(err, 'Failed to inspect model metadata.'));
+      }
     } finally {
-      setShowLoading(false);
+      if (mountedRef.current && inspectReqIdRef.current === reqId) {
+        setShowLoading(false);
+      }
     }
   };
 
@@ -191,7 +206,11 @@ export function MyModelsScreen({
         loading={showLoading}
         error={showError}
         details={showDetails}
-        onClose={() => setShowTarget(null)}
+        onClose={() => {
+          inspectReqIdRef.current += 1;
+          setShowLoading(false);
+          setShowTarget(null);
+        }}
       />
 
       <ConfirmModal

@@ -40,13 +40,20 @@ pub fn validate_worker_host(host: &str, allow_lan: bool) -> Result<(), ClusterEr
             "cloud metadata endpoints are strictly blocked".into(),
         ));
     }
-    let is_loopback = clean == "127.0.0.1" || lower == "localhost" || clean == "::1";
+    let parsed_ip = clean.parse::<IpAddr>().ok();
+    let is_loopback = lower == "localhost"
+        || parsed_ip.is_some_and(|ip| match ip {
+            IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+            }
+            IpAddr::V4(v4) => v4.is_loopback(),
+        });
     if !is_loopback && !allow_lan {
         return Err(ClusterError::InvalidHost(
             "non-loopback LAN/Tailscale workers require explicit opt-in".into(),
         ));
     }
-    if let Ok(ip) = clean.parse::<IpAddr>() {
+    if let Some(ip) = parsed_ip {
         match ip {
             IpAddr::V4(v4) if is_blocked_v4(v4) => {
                 return Err(ClusterError::InvalidHost(

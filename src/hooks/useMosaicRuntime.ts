@@ -46,6 +46,19 @@ export function useMosaicRuntime() {
   const isMountedRef = useRef(true);
   const selectedModelRef = useRef(selectedModel);
   selectedModelRef.current = selectedModel;
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const contextLengthRef = useRef(contextLength);
+  contextLengthRef.current = contextLength;
+  const executionProfileRef = useRef(executionProfile);
+  executionProfileRef.current = executionProfile;
+  const kvCacheTypeRef = useRef(kvCacheType);
+  kvCacheTypeRef.current = kvCacheType;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const streamingRef = useRef(streaming);
+  streamingRef.current = streaming;
+  const catalogReqIdRef = useRef(0);
   const activeSessionIdRef = useRef<string>(createSessionId());
   const defaultsSyncedRef = useRef(false);
 
@@ -118,16 +131,35 @@ export function useMosaicRuntime() {
     onPullDone, setMessages, setStreaming, setNotice,
   });
 
+  const fetchCatalog = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const reqId = ++catalogReqIdRef.current;
+    setCatalogLoading(true);
+    try {
+      const items = await mosaicApi.listCatalogWithFit(
+        contextLengthRef.current,
+        executionProfileRef.current,
+        kvCacheTypeRef.current
+      );
+      if (isMountedRef.current && catalogReqIdRef.current === reqId) {
+        setCatalog(items);
+      }
+    } catch (err) {
+      if (isMountedRef.current && catalogReqIdRef.current === reqId) {
+        setNotice(toErrorMessage(err));
+      }
+    } finally {
+      if (isMountedRef.current && catalogReqIdRef.current === reqId) {
+        setCatalogLoading(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (route !== 'discover' || !isTauriRuntime()) return;
-    let cancelled = false;
-    setCatalogLoading(true);
-    void mosaicApi.listCatalogWithFit(contextLength, executionProfile, kvCacheType)
-      .then((items) => { if (!cancelled && isMountedRef.current) setCatalog(items); })
-      .catch((err) => { if (!cancelled && isMountedRef.current) setNotice(toErrorMessage(err)); })
-      .finally(() => { if (!cancelled && isMountedRef.current) setCatalogLoading(false); });
-    return () => { cancelled = true; };
-  }, [route, contextLength, executionProfile, kvCacheType]);
+    void fetchCatalog();
+    return () => { catalogReqIdRef.current += 1; };
+  }, [route, contextLength, executionProfile, kvCacheType, fetchCatalog]);
 
   const runAction = useCallback(async (fn: () => Promise<string | void>, okMsg?: string) => {
     setNotice(null);
@@ -150,22 +182,24 @@ export function useMosaicRuntime() {
     handleSelectVolume: async (volumeIdentifier: string) => {
       setSelecting(true);
       await runAction(() => mosaicApi.selectExternalLibrary(volumeIdentifier).then(() => undefined));
+      if (isMountedRef.current && routeRef.current === 'discover') {
+        await fetchCatalog();
+      }
       if (isMountedRef.current) setSelecting(false);
     },
     handleRefreshCatalog: async () => {
       setNotice(null);
+      const refreshStartReqId = catalogReqIdRef.current;
       try {
         const res = await mosaicApi.refreshModelCatalog();
         if (!isMountedRef.current) return;
         setLastCatalogRefresh(res.refreshed_at);
         setNotice(`Catalog refreshed (${res.count} models).`);
-        setCatalogLoading(true);
-        const items = await mosaicApi.listCatalogWithFit(contextLength, executionProfile, kvCacheType);
-        if (isMountedRef.current) setCatalog(items);
+        if (catalogReqIdRef.current === refreshStartReqId || routeRef.current === 'discover') {
+          await fetchCatalog();
+        }
       } catch (err) {
         if (isMountedRef.current) setNotice(toErrorMessage(err));
-      } finally {
-        if (isMountedRef.current) setCatalogLoading(false);
       }
     },
     handlePullModel: (ollamaName: string) => {
@@ -173,35 +207,71 @@ export function useMosaicRuntime() {
       return runAction(() => mosaicApi.pullModel(ollamaName, found?.model.download_size_bytes ?? null));
     },
     handleCancelPull: (model: string) => {
-      void mosaicApi.cancelPull(model).catch((err) => { if (isMountedRef.current) setNotice(toErrorMessage(err)); });
+      void mosaicApi.cancelPull(model)
+        .then((cancelled) => {
+          if (isMountedRef.current && !cancelled) {
+            setPullProgress((prev) => (prev && prev.model === model ? { ...prev, done: true } : null));
+          }
+        })
+        .catch((err) => {
+          if (isMountedRef.current) {
+            setPullProgress(null);
+            setNotice(toErrorMessage(err));
+          }
+        });
     },
     handleDeleteModel: (name: string) => runAction(() => mosaicApi.deleteInstalledModel(name, true), `Deleted ${name}.`),
     handleSendMessage: async (prompt: string, opts: ChatSendOptions) => {
+      if (streamingRef.current) return;
       const reqSessionId = activeSessionIdRef.current;
-      const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: prompt }];
+      const nextMessages: ChatMessage[] = [...messagesRef.current, { role: 'user', content: prompt }];
+      messagesRef.current = nextMessages;
+      streamingRef.current = true;
       setMessages(nextMessages);
       setStreaming(true);
       setNotice(null);
       try {
         await mosaicApi.startChatStream({
-          session_id: reqSessionId, model: selectedModel, messages: nextMessages,
+          session_id: reqSessionId, model: selectedModelRef.current, messages: nextMessages,
           num_ctx: opts.numCtx, temperature: opts.temperature, execution_profile: opts.executionProfile,
           kv_cache_type: opts.kvCacheType === 'auto' ? null : opts.kvCacheType,
           num_gpu: opts.numGpu, keep_alive: opts.keepAlive || null,
         });
       } catch (err) {
         if (isMountedRef.current && activeSessionIdRef.current === reqSessionId) {
-          setStreaming(false); setNotice(toErrorMessage(err));
+          streamingRef.current = false;
+          setStreaming(false);
+          setNotice(toErrorMessage(err));
         }
       }
     },
     handleStopGeneration: () => {
       void mosaicApi.stopChatStream()
-        .then((stopped) => { if (isMountedRef.current && !stopped) setStreaming(false); })
-        .catch((err) => { if (isMountedRef.current) { setStreaming(false); setNotice(toErrorMessage(err)); } });
+        .then((stopped) => {
+          if (isMountedRef.current && !stopped) {
+            streamingRef.current = false;
+            setStreaming(false);
+          }
+        })
+        .catch((err) => {
+          if (isMountedRef.current) {
+            streamingRef.current = false;
+            setStreaming(false);
+            setNotice(toErrorMessage(err));
+          }
+        });
     },
-    handleUnloadModel: () => runAction(() => mosaicApi.unloadModel(selectedModel), `Unloaded ${selectedModel}.`),
-    handleNewSession: () => { activeSessionIdRef.current = createSessionId(); setMessages([]); setStreaming(false); },
+    handleUnloadModel: () => runAction(() => mosaicApi.unloadModel(selectedModelRef.current), `Unloaded ${selectedModelRef.current}.`),
+    handleNewSession: () => {
+      if (streamingRef.current) {
+        void mosaicApi.stopChatStream().catch(() => {});
+      }
+      activeSessionIdRef.current = createSessionId();
+      streamingRef.current = false;
+      messagesRef.current = [];
+      setMessages([]);
+      setStreaming(false);
+    },
     handleRunBenchmark: async (opts: BenchmarkRunOptions) => {
       setBenchmarkingModel(opts.model);
       setNotice(null);
