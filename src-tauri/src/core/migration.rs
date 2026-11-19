@@ -1,9 +1,34 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::security::path_guard;
+
+static MIGRATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn is_migration_active() -> bool {
+    MIGRATION_ACTIVE.load(Ordering::SeqCst)
+}
+
+pub struct MigrationActiveGuard;
+
+impl MigrationActiveGuard {
+    pub fn try_acquire() -> Result<Self, String> {
+        MIGRATION_ACTIVE
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| Self)
+            .map_err(|_| "An internal model migration is already in progress.".to_string())
+    }
+}
+
+impl Drop for MigrationActiveGuard {
+    fn drop(&mut self) {
+        MIGRATION_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationPreview {
@@ -28,6 +53,12 @@ pub fn default_internal_models_dir() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".ollama").join("models"))
 }
 
+fn should_skip_entry(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.starts_with("._") || name == ".DS_Store")
+}
+
 fn dir_stats(root: &Path, sub: &str) -> (usize, u64) {
     let target = root.join(sub);
     if !target.is_dir() {
@@ -42,7 +73,16 @@ fn dir_stats(root: &Path, sub: &str) -> (usize, u64) {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            if should_skip_entry(&path) {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
                 stack.push(path);
             } else if let Ok(meta) = entry.metadata() {
                 count += 1;
@@ -101,6 +141,7 @@ pub fn copy_internal_models(
     if !confirmed {
         return Err("Explicit confirmation is required before migrating model files.".into());
     }
+    let _guard = MigrationActiveGuard::try_acquire()?;
     let preview = preview_internal_migration(external_free_bytes);
     if !preview.exists {
         return Err("No internal ~/.ollama/models directory found to migrate.".into());
@@ -123,7 +164,16 @@ pub fn copy_internal_models(
             let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
+                if should_skip_entry(&path) {
+                    continue;
+                }
+                let Ok(ft) = entry.file_type() else {
+                    continue;
+                };
+                if ft.is_symlink() {
+                    continue;
+                }
+                if ft.is_dir() {
                     stack.push(path);
                     continue;
                 }
@@ -133,8 +183,34 @@ pub fn copy_internal_models(
                 if let Some(parent) = dest.parent() {
                     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
-                if !dest.exists() {
-                    let copied = fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+                let src_len = fs::metadata(&path).map_err(|e| e.to_string())?.len();
+                let dest_matches = dest.is_file()
+                    && fs::metadata(&dest).ok().map(|m| m.len()) == Some(src_len);
+                if !dest_matches {
+                    let parent = dest.parent().unwrap_or(dest_library_dir);
+                    let tmp_path = parent.join(format!(".mosaic-tmp-{}", Uuid::new_v4()));
+                    let copied = match fs::copy(&path, &tmp_path) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            let _ = fs::remove_file(&tmp_path);
+                            return Err(e.to_string());
+                        }
+                    };
+                    let tmp_len = fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
+                    if copied != src_len || tmp_len != src_len {
+                        let _ = fs::remove_file(&tmp_path);
+                        return Err(format!(
+                            "Migration byte-count mismatch for {}: expected {src_len}, copied {copied}",
+                            rel.display()
+                        ));
+                    }
+                    if dest.exists() {
+                        let _ = fs::remove_file(&dest);
+                    }
+                    if let Err(e) = fs::rename(&tmp_path, &dest) {
+                        let _ = fs::remove_file(&tmp_path);
+                        return Err(e.to_string());
+                    }
                     files_copied += 1;
                     bytes_copied += copied;
                 }
@@ -152,7 +228,21 @@ pub fn copy_internal_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use uuid::Uuid;
+
+    static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    struct HomeGuard(Option<std::ffi::OsString>);
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = &self.0 {
+                std::env::set_var("HOME", prev);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
 
     #[test]
     fn copy_requires_confirmation_and_copies_safely() {
@@ -161,6 +251,47 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
         let err = copy_internal_models(&dest, 10_000_000_000, false).unwrap_err();
         assert!(err.contains("confirmation"));
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn copy_internal_models_succeeds_on_fresh_empty_dest_and_skips_appledouble() {
+        let _lock = HOME_LOCK.lock().unwrap();
+        let base = std::env::temp_dir().join(format!("mosaic-mig-e2e-{}", Uuid::new_v4()));
+        let fake_home = base.join("home");
+        let models = fake_home.join(".ollama").join("models");
+        let blobs = models.join("blobs");
+        let manifests = models.join("manifests").join("registry.ollama.ai").join("library").join("qwen3");
+        let dest = base.join("fresh-external");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::create_dir_all(&manifests).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+
+        fs::write(blobs.join("sha256-real"), vec![b'A'; 1024]).unwrap();
+        fs::write(blobs.join("._sha256-real"), vec![b'B'; 4096]).unwrap();
+        fs::write(blobs.join(".DS_Store"), vec![b'C'; 512]).unwrap();
+        fs::write(manifests.join("latest"), vec![b'M'; 256]).unwrap();
+        fs::write(models.join("manifests").join("._latest"), vec![b'D'; 4096]).unwrap();
+
+        let _guard = HomeGuard(std::env::var_os("HOME"));
+        std::env::set_var("HOME", &fake_home);
+
+        let preview = preview_internal_migration(2000);
+        assert!(preview.exists);
+        assert_eq!(preview.blob_count, 1);
+        assert_eq!(preview.manifest_count, 1);
+        assert_eq!(preview.total_bytes, 1280);
+        assert!(preview.fits_on_external);
+
+        let res = copy_internal_models(&dest, 2000, true).expect("fresh empty dest migration");
+        assert_eq!(res.files_copied, 2);
+        assert_eq!(res.bytes_copied, 1280);
+        assert!(dest.join("blobs/sha256-real").is_file());
+        assert!(dest.join("manifests/registry.ollama.ai/library/qwen3/latest").is_file());
+        assert!(!dest.join("blobs/._sha256-real").exists());
+        assert!(!dest.join("blobs/.DS_Store").exists());
+        assert!(!dest.join("manifests/._latest").exists());
+
         fs::remove_dir_all(&base).unwrap();
     }
 }

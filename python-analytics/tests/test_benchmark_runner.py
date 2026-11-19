@@ -118,6 +118,57 @@ def test_benchmark_forwards_adaptive_options_and_keep_alive() -> None:
     assert res["value"]["applied_options"]["use_mlock"] is False
 
 
+def test_benchmark_preserves_kv_cache_type_profile_and_offload_ratio(monkeypatch) -> None:
+    captured_options: list[dict[str, Any]] = []
+
+    def fake_post(_url: str, payload: dict[str, Any], timeout_s: float = 60.0) -> dict[str, Any]:
+        if payload.get("keep_alive") == 0:
+            return {"done": True}
+        captured_options.append(dict(payload.get("options") or {}))
+        return {
+            "done": True,
+            "load_duration": 100_000_000,
+            "prompt_eval_duration": 50_000_000,
+            "eval_duration": 500_000_000,
+            "eval_count": 20,
+        }
+
+    monkeypatch.setattr(benchmark_runner, "_post_json", fake_post)
+    res = benchmark_runner.run_benchmark(
+        {
+            "endpoint": "http://127.0.0.1:11434",
+            "model": "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS",
+            "repetitions": 2,
+            "execution_profile": "constrained_memory",
+            "kv_cache_type": "q4_0",
+            "n_layers": 48,
+            "options": {"num_gpu": 43, "num_batch": 128},
+        },
+        JobContext(job_id="bench-kv", cancel_event=threading.Event()),
+    )
+    applied = res["value"]["applied_options"]
+    assert applied["execution_profile"] == "constrained_memory"
+    assert applied["kv_cache_type"] == "q4_0"
+    assert applied["offload_ratio"] == round(43 / 48, 3)
+    assert "kv_cache_type" not in captured_options[0]
+    assert "execution_profile" not in captured_options[0]
+    assert "offload_ratio" not in captured_options[0]
+
+    auto_res = benchmark_runner.run_benchmark(
+        {
+            "endpoint": "http://127.0.0.1:11434",
+            "model": "qwen3:30b-a3b",
+            "repetitions": 2,
+            "execution_profile": "constrained_memory",
+            "kv_cache_type": "auto",
+            "offload_ratio": 0.917,
+        },
+        JobContext(job_id="bench-auto-kv", cancel_event=threading.Event()),
+    )
+    assert auto_res["value"]["applied_options"]["kv_cache_type"] == "q4_0"
+    assert auto_res["value"]["applied_options"]["offload_ratio"] == 0.917
+
+
 def test_benchmark_adaptive_timeouts_and_cancellation(monkeypatch) -> None:
     timeouts: list[float] = []
 

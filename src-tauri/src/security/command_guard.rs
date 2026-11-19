@@ -14,6 +14,8 @@ const ALLOWED_BINARIES: &[&str] = &[
     "system_profiler",
     "diskutil",
     "launchctl",
+    "vm_stat",
+    "sysctl",
     "lsblk",
     "udisksctl",
     "nvidia-smi",

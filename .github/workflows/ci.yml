@@ -2,9 +2,9 @@ name: MOSAIC CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main, "feat/**"]
+  pull_request:
+    branches: [main, "feat/**", "fix/**"]
 
 jobs:
   python-analytics:
@@ -43,6 +43,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Stage bundled python-analytics resources
+        run: uv run --directory python-analytics python ../scripts/bundle_python_analytics.py
       - name: Install Linux Tauri system libraries
         if: matrix.os == 'ubuntu-latest'
         run: |

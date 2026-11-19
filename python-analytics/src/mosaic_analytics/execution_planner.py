@@ -49,13 +49,16 @@ def resolve_effective_ram_avail(hardware: dict[str, Any]) -> int:
     if hardware.get("ram_effective_avail_bytes") is not None:
         return cap(_nonneg_bytes(hardware.get("ram_effective_avail_bytes")))
 
-    rust_avail = _nonneg_bytes(hardware.get("ram_available_bytes"))
+    raw_rust_avail = hardware.get("ram_available_bytes")
+    rust_avail_num = safe_optional_float(raw_rust_avail)
+    has_explicit_nonneg = rust_avail_num is not None and rust_avail_num >= 0
+    rust_avail = _nonneg_bytes(raw_rust_avail)
     if hardware.get("psutil_available_bytes") is not None:
         return cap(max(rust_avail, _nonneg_bytes(hardware.get("psutil_available_bytes"))))
 
-    if bool(hardware.get("probe_psutil")) or rust_avail <= 0:
+    if bool(hardware.get("probe_psutil")) or not has_explicit_nonneg:
         return cap(max(rust_avail, int(psutil.virtual_memory().available)))
-    return max(0, rust_avail)
+    return cap(rust_avail)
 
 
 def resolve_memory_budget(
@@ -102,6 +105,31 @@ def normalize_profile(profile: str | None) -> str:
     """Normalize execution profile name to a supported policy."""
     candidate = str(profile or "auto_adaptive").strip().lower()
     return candidate if candidate in EXECUTION_PROFILES else "auto_adaptive"
+
+
+def resolve_adaptive_kv_label(
+    profile: str | None,
+    kv_raw: str | None,
+    ram_total_bytes: int,
+    ram_avail_bytes: int,
+    context_length: int,
+) -> str:
+    """Resolve explicit or 'auto' KV precision to a concrete f16/q8_0/q4_0 value."""
+    norm = str(kv_raw or "auto").strip().lower()
+    if norm in {"f16", "q8_0", "q4_0"}:
+        return norm
+    prof = normalize_profile(profile)
+    if prof == "constrained_memory":
+        return "q4_0"
+    if prof == "balanced":
+        return "q8_0"
+    if prof == "max_quality":
+        return "q8_0" if context_length >= 32768 else "f16"
+    if ram_total_bytes <= 12 * GIB or ram_avail_bytes <= 8 * GIB:
+        return "q4_0"
+    if ram_total_bytes <= 24 * GIB or ram_avail_bytes <= 16 * GIB or context_length >= 16384:
+        return "q8_0"
+    return "f16"
 
 
 def resolve_kv_cache_type(
@@ -171,7 +199,7 @@ def compute_execution_plan(
     kv_per_token = kv_bytes / safe_req_ctx
     plan_ctx = _resolve_plan_num_ctx(
         profile, safe_req_ctx, weight_bytes + overhead_bytes,
-        kv_per_token, budget.available_budget_bytes,
+        kv_per_token, combined_budget,
     )
     plan_kv_bytes = (
         min(MAX_SAFE_BYTES, kv_bytes)

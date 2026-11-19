@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { PullProgressBanner } from './components/common/PullProgressBanner';
 import { AppShell } from './components/layout/AppShell';
 import { OnboardingGate } from './components/onboarding/OnboardingGate';
+import { useMosaicRuntime } from './hooks/useMosaicRuntime';
 import { DiscoverModelsScreen } from './screens/DiscoverModelsScreen';
 import { ExternalStorageScreen } from './screens/ExternalStorageScreen';
 import { HardwareScreen } from './screens/HardwareScreen';
@@ -8,320 +10,130 @@ import { MyModelsScreen } from './screens/MyModelsScreen';
 import { OverviewScreen } from './screens/OverviewScreen';
 import { RunModelScreen } from './screens/RunModelScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
-import type {
-  AppBootstrapState,
-  BenchmarkReportRecord,
-  CatalogModelWithFit,
-  ChatMessage,
-  ChatTokenEvent,
-  InstalledModel,
-  NavRoute,
-  PullProgressEvent,
-  ResourceTelemetry,
-} from './types/ipc';
 
 export function App() {
-  const [route, setRoute] = useState<NavRoute>('overview');
-  const [state, setState] = useState<AppBootstrapState | null>(null);
-  const [catalog, setCatalog] = useState<CatalogModelWithFit[]>([]);
-  const [installed, setInstalled] = useState<InstalledModel[]>([]);
-  const [reports, setReports] = useState<BenchmarkReportRecord[]>([]);
-  const [benchmarkingModel, setBenchmarkingModel] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streaming, setStreaming] = useState<boolean>(false);
-  const [pullProgress, setPullProgress] = useState<PullProgressEvent | null>(null);
-  const [contextLength, setContextLength] = useState<number>(4096);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
-  const [selecting, setSelecting] = useState<boolean>(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const sessionRef = useRef<string>('session-1');
+  const rt = useMosaicRuntime();
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false);
 
-  const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-
-  const loadState = useCallback(async () => {
-    if (!isTauri()) {
-      setNotice('Browser preview mode: launch the MOSAIC desktop window to access live hardware, external drives, and Ollama.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const next = await invoke<AppBootstrapState>('get_app_state');
-      setState(next);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Failed to query MOSAIC native core.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadInstalled = useCallback(async () => {
-    if (!isTauri()) return;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const list = await invoke<InstalledModel[]>('list_installed_models');
-      setInstalled(list);
-      if (!selectedModel && list.length > 0) setSelectedModel(list[0].name);
-    } catch {
-      // Ollama offline.
-    }
-  }, [selectedModel]);
-
-  const loadReports = useCallback(async () => {
-    if (!isTauri()) return;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      setReports(await invoke<BenchmarkReportRecord[]>('list_benchmark_reports'));
-    } catch {
-      // Ignore if DB unavailable.
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadState();
-    void loadInstalled();
-    void loadReports();
-  }, [loadState, loadInstalled, loadReports]);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-    const intervalMs = state?.settings.telemetry_poll_ms ?? 5000;
-    const timer = window.setInterval(() => {
-      void (async () => {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const telemetry = await invoke<ResourceTelemetry>('get_telemetry');
-          setState((prev) => (prev ? { ...prev, telemetry } : prev));
-        } catch {
-          // Ignore transient polling errors.
-        }
-      })();
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [state?.settings.telemetry_poll_ms]);
-
-  useEffect(() => {
-    let unlistenPull: (() => void) | undefined;
-    let unlistenChat: (() => void) | undefined;
-
-    void (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        unlistenPull = await listen<PullProgressEvent>('mosaic://pull-progress', (ev) => {
-          setPullProgress(ev.payload);
-          if (ev.payload.done) void loadInstalled();
-        });
-        unlistenChat = await listen<ChatTokenEvent>('mosaic://chat-token', (ev) => {
-          if (ev.payload.error) {
-            setNotice(ev.payload.error);
-            setStreaming(false);
-            return;
-          }
-          if (ev.payload.token) {
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              if (last?.role === 'assistant') {
-                return [...prev.slice(0, -1), { ...last, content: last.content + ev.payload.token }];
-              }
-              return [...prev, { role: 'assistant', content: ev.payload.token }];
-            });
-          }
-          if (ev.payload.done) setStreaming(false);
-        });
-      } catch {
-        // Non-Tauri browser preview.
-      }
-    })();
-
-    return () => {
-      unlistenPull?.();
-      unlistenChat?.();
-    };
-  }, [loadInstalled]);
-
-  useEffect(() => {
-    if (route !== 'discover') return;
-    setCatalogLoading(true);
-    void (async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const items = await invoke<CatalogModelWithFit[]>('list_catalog_with_fit', {
-          contextLength,
-        });
-        setCatalog(items);
-      } catch {
-        // Browser preview fallback.
-      } finally {
-        setCatalogLoading(false);
-      }
-    })();
-  }, [route, contextLength]);
-
-  const invokeAndRefresh = async (cmd: string, args?: Record<string, unknown>, okMsg?: string) => {
-    setNotice(null);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const res = await invoke<string>(cmd, args);
-      if (okMsg) setNotice(typeof res === 'string' && res ? res : okMsg);
-      await loadState();
-      await loadInstalled();
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleSelectVolume = async (volumeIdentifier: string) => {
-    setSelecting(true);
-    await invokeAndRefresh('select_external_library', { volumeIdentifier });
-    setSelecting(false);
-  };
-
-  const handlePullModel = async (ollamaName: string) => {
-    const found = catalog.find((c) => c.model.ollama_name === ollamaName);
-    await invokeAndRefresh('pull_model', {
-      model: ollamaName,
-      estimatedBytes: found?.model.download_size_bytes ?? null,
-    });
-  };
-
-  const handleSendMessage = async (prompt: string, numCtx: number, temperature: number) => {
-    const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: prompt }];
-    setMessages(nextMessages);
-    setStreaming(true);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('start_chat_stream', {
-        request: {
-          session_id: sessionRef.current,
-          model: selectedModel,
-          messages: nextMessages,
-          num_ctx: numCtx,
-          temperature,
-        },
-      });
-    } catch (err) {
-      setStreaming(false);
-      setNotice(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleRunBenchmark = async (modelName: string) => {
-    setBenchmarkingModel(modelName);
-    setNotice(null);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('run_model_benchmark', { model: modelName, contextLength, repetitions: 2 });
-      await loadReports();
-      setNotice(`Benchmark complete for ${modelName}.`);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBenchmarkingModel(null);
-    }
-  };
-
-  const handleExportReport = async (reportId: string, format: 'json' | 'csv' | 'html') => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const res = await invoke<{ format: string; content: string }>('export_benchmark_report', {
-        reportId,
-        format,
-      });
-      const blob = new Blob([res.content], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `mosaic-benchmark-${reportId.slice(0, 8)}.${res.format}`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const showOnboarding = !state || !state.library_connected;
+  const showOnboarding =
+    (!rt.state || !rt.state.library_connected) &&
+    rt.route !== 'hardware' &&
+    rt.route !== 'settings' &&
+    !(rt.state && rt.route === 'storage');
 
   return (
     <AppShell
-      activeRoute={route}
-      onNavigate={setRoute}
-      state={state}
-      loading={loading}
+      activeRoute={rt.route}
+      onNavigate={rt.setRoute}
+      state={rt.state}
+      loading={rt.loading}
       onRefresh={() => {
-        void loadState();
-        void loadInstalled();
+        void rt.loadState();
+        void rt.loadInstalled();
       }}
     >
-      {notice && (
-        <section className="mosaic-panel" role="status" aria-live="polite">
-          <strong>Status:</strong> {notice}
+      {rt.notice && (
+        <section className="mosaic-callout mosaic-callout-info" role="status" aria-live="polite">
+          <strong>Status:</strong> {rt.notice}
         </section>
       )}
-      {pullProgress && !pullProgress.done && (
-        <section className="mosaic-panel" role="status">
-          Pulling <strong>{pullProgress.model}</strong>: {pullProgress.status}
-        </section>
+      {rt.pullProgress && !rt.pullProgress.done && (
+        <PullProgressBanner pullProgress={rt.pullProgress} onCancelPull={rt.handleCancelPull} />
       )}
-      {showOnboarding && route !== 'hardware' && route !== 'settings' && (
+      {showOnboarding && (
         <OnboardingGate
-          volumes={state?.external_volumes ?? []}
-          selecting={selecting}
-          onSelectVolume={(id) => void handleSelectVolume(id)}
-          onInspectHardware={() => setRoute('hardware')}
+          volumes={rt.state?.external_volumes ?? []}
+          selecting={rt.selecting}
+          onSelectVolume={(id) => void rt.handleSelectVolume(id)}
+          onInspectHardware={() => rt.setRoute('hardware')}
         />
       )}
-      {state && route === 'overview' && <OverviewScreen state={state} onNavigate={setRoute} />}
-      {route === 'discover' && (
+      {rt.state && rt.route === 'overview' && (
+        <OverviewScreen
+          state={rt.state}
+          installedCount={rt.installed.length}
+          onNavigate={rt.setRoute}
+        />
+      )}
+      {rt.route === 'discover' && (
         <DiscoverModelsScreen
-          items={catalog}
-          loading={catalogLoading}
-          contextLength={contextLength}
-          libraryConnected={Boolean(state?.library_connected)}
-          freeBytes={state?.active_library?.free_bytes ?? 0}
-          pullingName={pullProgress && !pullProgress.done ? pullProgress.model : null}
-          onChangeContextLength={setContextLength}
-          onPullModel={(name) => void handlePullModel(name)}
-        />
-      )}
-      {route === 'my-models' && (
-        <MyModelsScreen
-          models={installed}
-          reports={reports}
-          loading={loading}
-          libraryConnected={Boolean(state?.library_connected)}
-          benchmarkingModel={benchmarkingModel}
-          onRefresh={() => void loadInstalled()}
-          onLaunchModel={(name) => {
-            setSelectedModel(name);
-            setRoute('run');
+          items={rt.catalog}
+          loading={rt.catalogLoading}
+          contextLength={rt.contextLength}
+          executionProfile={rt.executionProfile}
+          kvCacheType={rt.kvCacheType}
+          lastCatalogRefresh={rt.lastCatalogRefresh}
+          refreshingCatalog={refreshingCatalog}
+          libraryConnected={Boolean(rt.state?.library_connected)}
+          freeBytes={rt.state?.active_library?.free_bytes ?? 0}
+          pullingName={rt.pullProgress && !rt.pullProgress.done ? rt.pullProgress.model : null}
+          onChangeContextLength={rt.setContextLength}
+          onChangeExecutionProfile={rt.setExecutionProfile}
+          onChangeKvCacheType={rt.setKvCacheType}
+          onRefreshCatalog={() => {
+            setRefreshingCatalog(true);
+            void rt.handleRefreshCatalog().finally(() => setRefreshingCatalog(false));
           }}
-          onRunBenchmark={handleRunBenchmark}
-          onExportReport={(id, fmt) => void handleExportReport(id, fmt)}
-          onDeleteModel={(name) =>
-            invokeAndRefresh('delete_installed_model', { model: name, confirmed: true })
+          onPullModel={(name) => void rt.handlePullModel(name)}
+        />
+      )}
+      {rt.route === 'my-models' && (
+        <MyModelsScreen
+          models={rt.installed}
+          reports={rt.reports}
+          loading={rt.loading}
+          libraryConnected={Boolean(rt.state?.library_connected)}
+          benchmarkingModel={rt.benchmarkingModel}
+          onRefresh={() => void rt.loadInstalled()}
+          onLaunchModel={(name) => {
+            rt.setSelectedModel(name);
+            rt.setRoute('run');
+          }}
+          onRunBenchmark={(model, contextLength, repetitions) =>
+            rt.handleRunBenchmark({
+              model,
+              contextLength: contextLength ?? rt.contextLength,
+              repetitions: repetitions ?? 2,
+              executionProfile: rt.executionProfile,
+              kvCacheType: rt.kvCacheType,
+            })
           }
+          onExportReport={(id, fmt) => void rt.handleExportReport(id, fmt)}
+          onDeleteModel={rt.handleDeleteModel}
         />
       )}
-      {route === 'run' && (
+      {rt.route === 'run' && (
         <RunModelScreen
-          models={installed}
-          selectedModel={selectedModel}
-          libraryConnected={Boolean(state?.library_connected)}
-          ollamaReachable={Boolean(state?.ollama.api_reachable)}
-          streaming={streaming}
-          messages={messages}
-          telemetry={state?.telemetry}
-          onSelectModel={setSelectedModel}
-          onSendMessage={(p, c, t) => void handleSendMessage(p, c, t)}
-          onStopGeneration={() => void invokeAndRefresh('stop_chat_stream')}
-          onUnloadModel={() => void invokeAndRefresh('unload_model', { model: selectedModel })}
+          models={rt.installed}
+          selectedModel={rt.selectedModel}
+          libraryConnected={Boolean(rt.state?.library_connected)}
+          ollamaReachable={Boolean(rt.state?.ollama.api_reachable)}
+          streaming={rt.streaming}
+          messages={rt.messages}
+          telemetry={rt.state?.telemetry}
+          defaultContextLength={rt.state?.settings.default_context_length ?? rt.contextLength}
+          executionProfile={rt.executionProfile}
+          kvCacheType={rt.kvCacheType}
+          onSelectModel={rt.setSelectedModel}
+          onSendMessage={(prompt, numCtx, temperature, opts) =>
+            void rt.handleSendMessage(prompt, {
+              numCtx,
+              temperature,
+              executionProfile: opts?.executionProfile ?? rt.executionProfile,
+              kvCacheType: opts?.kvCacheType ?? rt.kvCacheType,
+              numGpu: opts?.numGpu ?? null,
+              keepAlive: rt.state?.settings.keep_alive ?? '5m',
+            })
+          }
+          onStopGeneration={rt.handleStopGeneration}
+          onUnloadModel={rt.handleUnloadModel}
+          onNewSession={rt.handleNewSession}
+          onStartManagedOllama={rt.handleStartManagedOllama}
         />
       )}
-      {route === 'hardware' &&
-        (state ? (
-          <HardwareScreen state={state} />
+      {rt.route === 'hardware' &&
+        (rt.state ? (
+          <HardwareScreen state={rt.state} />
         ) : (
           <section className="mosaic-panel" aria-labelledby="hw-empty">
             <h2 id="hw-empty">Hardware &amp; Memory Profile</h2>
@@ -330,28 +142,22 @@ export function App() {
             </p>
           </section>
         ))}
-      {state && route === 'storage' && (
+      {rt.state && rt.route === 'storage' && (
         <ExternalStorageScreen
-          state={state}
-          selecting={selecting}
-          onSelectVolume={(id) => void handleSelectVolume(id)}
-          onInspectHardware={() => setRoute('hardware')}
-          onConfigureOllamaStorage={() =>
-            invokeAndRefresh(
-              'configure_ollama_storage',
-              { confirmed: true },
-              'OLLAMA_MODELS configured.'
-            )
-          }
-          onSafeEject={() =>
-            invokeAndRefresh('prepare_safe_eject', undefined, 'Drive is safe to remove.')
-          }
+          state={rt.state}
+          selecting={rt.selecting}
+          onSelectVolume={(id) => void rt.handleSelectVolume(id)}
+          onInspectHardware={() => rt.setRoute('hardware')}
+          onConfigureOllamaStorage={rt.handleConfigureOllamaStorage}
+          onStartManagedOllama={rt.handleStartManagedOllama}
+          onStopManagedOllama={rt.handleStopManagedOllama}
+          onSafeEject={rt.handleSafeEject}
         />
       )}
-      {state && route === 'settings' && (
+      {rt.state && rt.route === 'settings' && (
         <SettingsScreen
-          settings={state.settings}
-          onSaveSetting={(key, value) => invokeAndRefresh('update_setting', { key, value })}
+          settings={rt.state.settings}
+          onSaveSetting={rt.handleSaveSetting}
         />
       )}
     </AppShell>

@@ -29,6 +29,29 @@ pub struct InstalledModel {
     pub quantization_level: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ModelShowInfo {
+    pub format: Option<String>,
+    pub family: Option<String>,
+    pub families: Option<Vec<String>>,
+    pub parameter_size: Option<String>,
+    pub quantization_level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ModelShowDetails {
+    pub model: String,
+    pub modelfile: Option<String>,
+    pub parameters: Option<String>,
+    pub template: Option<String>,
+    pub license: Option<String>,
+    pub details: Option<ModelShowInfo>,
+    pub model_info: Option<serde_json::Value>,
+    pub capabilities: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize)]
 struct TagsResponse {
     models: Vec<TagItem>,
@@ -54,7 +77,7 @@ pub async fn list_installed_models(endpoint: &str) -> Result<Vec<InstalledModel>
     let base_url = ollama_manager::validate_loopback_endpoint(endpoint)?;
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
         .build()?;
 
     let url = format!("{}/api/tags", base_url.as_str().trim_end_matches('/'));
@@ -77,6 +100,33 @@ pub async fn list_installed_models(endpoint: &str) -> Result<Vec<InstalledModel>
             quantization_level: m.details.as_ref().and_then(|d| d.quantization_level.clone()),
         })
         .collect())
+}
+
+pub async fn show_model_details(
+    endpoint: &str,
+    model: &str,
+) -> Result<ModelShowDetails, LibraryError> {
+    command_guard::validate_model_name(model)?;
+    let base_url = ollama_manager::validate_loopback_endpoint(endpoint)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let url = format!("{}/api/show", base_url.as_str().trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "model": model }))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(LibraryError::RemoteStatus(resp.status().as_u16()));
+    }
+    let mut parsed = resp.json::<ModelShowDetails>().await?;
+    if parsed.model.is_empty() {
+        parsed.model = model.to_string();
+    }
+    Ok(parsed)
 }
 
 pub async fn delete_installed_model(endpoint: &str, model: &str) -> Result<(), LibraryError> {

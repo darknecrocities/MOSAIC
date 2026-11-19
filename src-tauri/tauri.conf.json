@@ -17,7 +17,7 @@
         "height": 820,
         "minWidth": 900,
         "minHeight": 640,
-        "backgroundColor": "#FFFFFF"
+        "backgroundColor": "#0B0F17"
       }
     ],
     "security": {
@@ -27,6 +27,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "resources/python-analytics/": "python-analytics"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

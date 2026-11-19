@@ -1,20 +1,19 @@
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::TcpStream;
-use tokio::process::{Child, Command};
 use uuid::Uuid;
 
+pub use crate::core::cluster_flags::{
+    scan_gguf_files, validate_gguf_path, validate_llama_extra_flags, validate_worker_host,
+};
+pub use crate::core::cluster_runtime::ClusterRuntimeRegistry;
 use crate::core::model_catalog::CatalogModelEntry;
 use crate::core::python_analytics_service;
 use crate::core::settings_store::{SettingsStore, StoreError};
-use crate::core::system_probe::SystemProfile;
-use crate::security::{command_guard, path_guard};
+use crate::core::system_probe::{self, SystemProfile};
 
 #[derive(Debug, Error)]
 pub enum ClusterError {
@@ -63,43 +62,13 @@ pub struct ClusterPlan {
     pub warnings: Vec<String>,
 }
 
-pub fn validate_worker_host(host: &str, allow_lan: bool) -> Result<(), ClusterError> {
-    let trimmed = host.trim();
-    if trimmed.is_empty() || trimmed.len() > 253 {
-        return Err(ClusterError::InvalidHost(host.to_string()));
-    }
-    if trimmed == "169.254.169.254" || trimmed.eq_ignore_ascii_case("metadata.google.internal") {
-        return Err(ClusterError::InvalidHost(
-            "cloud metadata endpoints are strictly blocked".into(),
-        ));
-    }
-    let is_loopback = trimmed == "127.0.0.1" || trimmed == "localhost" || trimmed == "::1";
-    if !is_loopback && !allow_lan {
-        return Err(ClusterError::InvalidHost(
-            "non-loopback LAN/Tailscale workers require explicit opt-in".into(),
-        ));
-    }
-    if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        if ip.is_unspecified() || ip.is_multicast() {
-            return Err(ClusterError::InvalidHost(host.to_string()));
-        }
-    } else if !trimmed
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-    {
-        return Err(ClusterError::InvalidHost(host.to_string()));
-    }
-    Ok(())
-}
-
 pub fn list_workers(store: &SettingsStore) -> Result<Vec<ClusterWorker>, ClusterError> {
     store
         .with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, name, host, port, vram_bytes, ram_available_bytes,
                         backend, status, rtt_ms, created_at
-                 FROM cluster_workers
-                 ORDER BY created_at ASC",
+                 FROM cluster_workers ORDER BY created_at ASC",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(ClusterWorker {
@@ -221,13 +190,16 @@ pub async fn compute_cluster_plan(
     safety_reserve_gib: f64,
     media_kind: Option<&str>,
 ) -> Result<ClusterPlan, String> {
+    let vram_bytes = system_probe::primary_gpu_vram_bytes(system);
     let params = serde_json::json!({
         "model": model,
         "local_node": {
             "name": system.cpu_brand,
             "is_unified_memory": system.is_unified_memory,
-            "vram_bytes": serde_json::Value::Null,
+            "vram_bytes": vram_bytes,
+            "ram_total_bytes": system.ram_total_bytes,
             "ram_available_bytes": system.ram_available_bytes,
+            "metal_wired_limit_bytes": system.metal_wired_limit_bytes,
         },
         "workers": workers,
         "storage": { "media_kind": media_kind.unwrap_or("unknown") },
@@ -238,71 +210,14 @@ pub async fn compute_cluster_plan(
     let (_, env) = python_analytics_service::run_single_job("plan_cluster", params, 6)
         .await
         .map_err(|e| e.to_string())?;
+    if env.kind == "error" {
+        return Err(env.payload["error"]["message"]
+            .as_str()
+            .unwrap_or("Cluster planning failed")
+            .to_string());
+    }
     serde_json::from_value::<ClusterPlan>(env.payload["value"].clone())
         .map_err(|e| format!("invalid cluster plan payload: {e}"))
-}
-
-#[derive(Default)]
-pub struct ClusterRuntimeRegistry {
-    child: Arc<Mutex<Option<Child>>>,
-}
-
-impl ClusterRuntimeRegistry {
-    pub fn stop(&self) -> bool {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(mut proc_child) = guard.take() {
-                let _ = proc_child.start_kill();
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn launch_llama_server(
-        &self,
-        library_root: &Path,
-        gguf_rel_path: &str,
-        extra_flags: &[String],
-        confirmed: bool,
-    ) -> Result<String, String> {
-        if !confirmed {
-            return Err("Explicit confirmation required before launching llama-server.".into());
-        }
-        let model_path = path_guard::resolve_within(library_root, Path::new(gguf_rel_path))
-            .map_err(|e| e.to_string())?;
-        if !model_path.is_file() {
-            return Err(format!("GGUF file not found on external drive: {}", model_path.display()));
-        }
-
-        let bin = ["/opt/homebrew/bin/llama-server", "/usr/local/bin/llama-server", "/usr/bin/llama-server"]
-            .into_iter()
-            .map(PathBuf::from)
-            .find(|p| p.is_file())
-            .ok_or_else(|| {
-                "llama-server binary not found. Install llama.cpp to launch experimental MoE/RPC mode.".to_string()
-            })?;
-        command_guard::validate_allowed_binary(&bin).map_err(|e| e.to_string())?;
-
-        self.stop();
-        let mut cmd = Command::new(&bin);
-        cmd.arg("-m")
-            .arg(&model_path)
-            .arg("--host")
-            .arg("127.0.0.1")
-            .arg("--port")
-            .arg("11435");
-        for flag in extra_flags {
-            if !flag.contains('\0') {
-                cmd.arg(flag);
-            }
-        }
-        cmd.kill_on_drop(true);
-        let child = cmd.spawn().map_err(|e| e.to_string())?;
-        if let Ok(mut guard) = self.child.lock() {
-            *guard = Some(child);
-        }
-        Ok("Experimental llama-server started on http://127.0.0.1:11435".into())
-    }
 }
 
 #[cfg(test)]
@@ -321,14 +236,8 @@ mod tests {
     fn worker_crud_roundtrip() {
         let store = SettingsStore::open_in_memory().unwrap();
         let w = add_worker(
-            &store,
-            "RTX-Worker",
-            "127.0.0.1",
-            50052,
-            24 * 1024_u64.pow(3),
-            16 * 1024_u64.pow(3),
-            "cuda",
-            false,
+            &store, "RTX-Worker", "127.0.0.1", 50052,
+            24 * 1024_u64.pow(3), 16 * 1024_u64.pow(3), "cuda", false,
         )
         .unwrap();
         assert_eq!(list_workers(&store).unwrap().len(), 1);

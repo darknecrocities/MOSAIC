@@ -1,6 +1,11 @@
+export * from './analytics';
+
+import type { ExecutionPlan } from './analytics';
+
 export interface GpuDeviceInfo {
   vendor: string;
   model: string;
+  name?: string;
   vram_bytes: number | null;
   unified_memory: boolean;
   source: string;
@@ -15,6 +20,8 @@ export interface SystemProfile {
   logical_cores: number;
   ram_total_bytes: number;
   ram_available_bytes: number;
+  metal_wired_limit_bytes?: number | null;
+  gpu_vram_bytes?: number | null;
   is_unified_memory: boolean;
   gpus: GpuDeviceInfo[];
   gpu_status: string;
@@ -81,6 +88,15 @@ export interface AppSettingsSnapshot {
   ollama_endpoint: string;
   telemetry_poll_ms: number;
   ollama_management_mode: string;
+  default_context_length: number;
+  execution_profile: 'auto_adaptive' | 'max_quality' | 'balanced' | 'constrained_memory' | string;
+  kv_cache_type: 'auto' | 'f16' | 'q8_0' | 'q4_0' | string;
+  max_loaded_models: number;
+  num_thread: number | null;
+  num_batch: number | null;
+  num_ubatch: number | null;
+  keep_alive: string;
+  num_parallel: number;
 }
 
 export interface AppBootstrapState {
@@ -136,6 +152,11 @@ export interface ModelFitAssessment {
   reasons: string[];
   source: string;
   confidence: string;
+  execution_plan?: ExecutionPlan | null;
+  requested_context_length?: number | null;
+  gpu_budget_bytes?: number | null;
+  cpu_spill_budget_bytes?: number | null;
+  limitations?: string[];
 }
 
 export interface CatalogModelWithFit {
@@ -162,50 +183,11 @@ export interface PullProgressEvent {
   error: string | null;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-}
-
 export interface ChatTokenEvent {
   session_id: string;
   token: string;
   done: boolean;
   error: string | null;
-}
-
-export interface ClusterWorker {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  vram_bytes: number;
-  ram_available_bytes: number;
-  backend: string;
-  status: string;
-  rtt_ms: number | null;
-  created_at: string;
-}
-
-export interface NodeAllocation {
-  name: string;
-  role: string;
-  endpoint: string;
-  allocated_bytes: number;
-  budget_bytes: number;
-}
-
-export interface ClusterPlan {
-  strategy: string;
-  feasible: boolean;
-  is_moe: boolean;
-  total_demand_bytes: number;
-  tier1_gpu_bytes: number;
-  tier2_ram_bytes: number;
-  tier3_disk_mmap_bytes: number;
-  node_allocations: NodeAllocation[];
-  runtime_flags: string[];
-  warnings: string[];
 }
 
 export interface MigrationPreview {
@@ -215,19 +197,4 @@ export interface MigrationPreview {
   manifest_count: number;
   total_bytes: number;
   fits_on_external: boolean;
-}
-
-export interface BenchmarkReportRecord {
-  id: string;
-  model_name: string;
-  context_length: number;
-  storage_media_kind: string;
-  cold_load_ms: number | null;
-  warm_load_ms: number | null;
-  ttft_median_ms: number | null;
-  tok_per_sec_median: number | null;
-  peak_ram_bytes: number | null;
-  repetitions: number;
-  raw_report_json: string;
-  created_at: string;
 }

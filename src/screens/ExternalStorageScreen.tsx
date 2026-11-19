@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FolderSync, Power, Wrench } from 'lucide-react';
+import { FolderSync, Play, Power, Square, Wrench } from 'lucide-react';
 import { ConfirmModal } from '../components/common/ConfirmModal';
 import { OnboardingGate } from '../components/onboarding/OnboardingGate';
 import type { AppBootstrapState, MigrationPreview } from '../types/ipc';
 import { formatGiB } from '../utils/format';
+import { mosaicApi } from '../utils/mosaicApi';
+import { isTauriRuntime, toErrorMessage } from '../utils/tauriClient';
 
 interface ExternalStorageScreenProps {
   state: AppBootstrapState;
@@ -11,8 +13,12 @@ interface ExternalStorageScreenProps {
   onSelectVolume: (id: string) => void;
   onInspectHardware: () => void;
   onConfigureOllamaStorage: () => Promise<void>;
+  onStartManagedOllama?: () => Promise<void>;
+  onStopManagedOllama?: () => Promise<void>;
   onSafeEject: () => Promise<void>;
 }
+
+type ConfirmMode = 'ollama' | 'start-ollama' | 'stop-ollama' | 'eject' | 'migrate' | null;
 
 export function ExternalStorageScreen({
   state,
@@ -20,22 +26,19 @@ export function ExternalStorageScreen({
   onSelectVolume,
   onInspectHardware,
   onConfigureOllamaStorage,
+  onStartManagedOllama,
+  onStopManagedOllama,
   onSafeEject,
 }: ExternalStorageScreenProps) {
-  const [confirmMode, setConfirmMode] = useState<'ollama' | 'eject' | 'migrate' | null>(null);
+  const [confirmMode, setConfirmMode] = useState<ConfirmMode>(null);
   const [migrationPreview, setMigrationPreview] = useState<MigrationPreview | null>(null);
   const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
 
-  const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-
   const loadMigrationPreview = useCallback(async () => {
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      setMigrationPreview(await invoke<MigrationPreview>('preview_internal_migration'));
-    } catch {
-      // Ignore in browser preview.
-    }
+      setMigrationPreview(await mosaicApi.previewInternalMigration());
+    } catch { /* Ignore in browser preview. */ }
   }, []);
 
   useEffect(() => {
@@ -43,36 +46,27 @@ export function ExternalStorageScreen({
   }, [loadMigrationPreview]);
 
   const handleMigrate = async () => {
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     setMigrationStatus('Copying internal models to external drive...');
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const res = await invoke<{ files_copied: number; bytes_copied: number }>(
-        'execute_internal_migration',
-        { confirmed: true }
-      );
+      const res = await mosaicApi.executeInternalMigration(true);
       setMigrationStatus(
         `Copied ${res.files_copied} file(s) (${formatGiB(res.bytes_copied)}) to external library.`
       );
     } catch (err) {
-      setMigrationStatus(err instanceof Error ? err.message : String(err));
+      setMigrationStatus(toErrorMessage(err));
     }
   };
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
+    <div className="mosaic-stack">
       {state.active_library && (
         <section className="mosaic-panel" aria-labelledby="active-lib-heading">
           <div className="mosaic-panel-header">
             <h2 id="active-lib-heading">Active External Library</h2>
-            <span
-              className={
-                state.library_connected
-                  ? 'mosaic-badge mosaic-badge-success'
-                  : 'mosaic-badge mosaic-badge-error'
-              }
-            >
-              {state.library_connected ? 'Connected & Writable' : 'Disconnected'}
+            <span className="mosaic-status-inline">
+              <span className={state.library_connected ? 'mosaic-status-dot mosaic-status-dot-ok' : 'mosaic-status-dot mosaic-status-dot-warn'} />
+              <span>{state.library_connected ? 'Connected & Writable' : 'Disconnected'}</span>
             </span>
           </div>
           <div className="mosaic-kv">
@@ -85,19 +79,16 @@ export function ExternalStorageScreen({
           </div>
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">Filesystem / Media</span>
-            <span>
-              {state.active_library.filesystem} ({state.active_library.media_kind})
-            </span>
+            <span>{state.active_library.filesystem} ({state.active_library.media_kind})</span>
           </div>
           <div className="mosaic-kv">
             <span className="mosaic-kv-label">Capacity</span>
-            <span>
-              {formatGiB(state.active_library.free_bytes)} free /{' '}
-              {formatGiB(state.active_library.total_bytes)}
+            <span className="mosaic-num">
+              {formatGiB(state.active_library.free_bytes)} free / {formatGiB(state.active_library.total_bytes)}
             </span>
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+          <div className="mosaic-card-actions">
             <button
               type="button"
               className="mosaic-button-secondary"
@@ -107,14 +98,35 @@ export function ExternalStorageScreen({
               <Wrench size={15} aria-hidden="true" />
               <span>Configure OLLAMA_MODELS</span>
             </button>
+            {onStartManagedOllama && !state.ollama.api_reachable && (
+              <button
+                type="button"
+                className="mosaic-button"
+                disabled={!state.library_connected}
+                onClick={() => setConfirmMode('start-ollama')}
+              >
+                <Play size={15} aria-hidden="true" />
+                <span>Start Managed Ollama</span>
+              </button>
+            )}
+            {onStopManagedOllama && state.ollama.api_reachable && (
+              <button
+                type="button"
+                className="mosaic-button-danger"
+                onClick={() => setConfirmMode('stop-ollama')}
+              >
+                <Square size={15} aria-hidden="true" />
+                <span>Stop Managed Ollama</span>
+              </button>
+            )}
             <button
               type="button"
-              className="mosaic-button"
+              className="mosaic-button-danger"
               disabled={!state.library_connected}
               onClick={() => setConfirmMode('eject')}
             >
               <Power size={15} aria-hidden="true" />
-              <span>Stop model and prepare drive for removal</span>
+              <span>Prepare Eject</span>
             </button>
             {migrationPreview?.exists && migrationPreview.total_bytes > 0 && (
               <button
@@ -124,16 +136,12 @@ export function ExternalStorageScreen({
                 onClick={() => setConfirmMode('migrate')}
               >
                 <FolderSync size={15} aria-hidden="true" />
-                <span>
-                  Migrate Internal Models ({formatGiB(migrationPreview.total_bytes)})
-                </span>
+                <span>Migrate Internal Models ({formatGiB(migrationPreview.total_bytes)})</span>
               </button>
             )}
           </div>
           {migrationStatus && (
-            <p className="mosaic-subtitle" role="status" style={{ marginTop: 8 }}>
-              {migrationStatus}
-            </p>
+            <p className="mosaic-callout mosaic-callout-info" role="status">{migrationStatus}</p>
           )}
         </section>
       )}
@@ -148,37 +156,44 @@ export function ExternalStorageScreen({
       <ConfirmModal
         open={confirmMode === 'ollama'}
         title="Configure Ollama Storage Directory"
-        description={`Back up existing Ollama settings and set OLLAMA_MODELS to ${state.active_library?.directory_path ?? ''}? You may need to restart Ollama for changes to take effect.`}
+        description={`Back up existing Ollama settings and set OLLAMA_MODELS to ${state.active_library?.directory_path ?? ''}?`}
         confirmLabel="Apply Configuration"
         onCancel={() => setConfirmMode(null)}
-        onConfirm={() => {
-          setConfirmMode(null);
-          void onConfigureOllamaStorage();
-        }}
+        onConfirm={() => { setConfirmMode(null); void onConfigureOllamaStorage(); }}
       />
-
+      <ConfirmModal
+        open={confirmMode === 'start-ollama'}
+        title="Start Managed Ollama"
+        description={`Launch supervised Ollama using OLLAMA_MODELS=${state.active_library?.directory_path ?? ''} with adaptive Flash Attention and KV cache environment settings?`}
+        confirmLabel="Start Managed Ollama"
+        onCancel={() => setConfirmMode(null)}
+        onConfirm={() => { setConfirmMode(null); void onStartManagedOllama?.(); }}
+      />
+      <ConfirmModal
+        open={confirmMode === 'stop-ollama'}
+        title="Stop Managed Ollama"
+        description="Stop the supervised Ollama daemon managed by MOSAIC?"
+        confirmLabel="Stop Managed Ollama"
+        variant="danger"
+        onCancel={() => setConfirmMode(null)}
+        onConfirm={() => { setConfirmMode(null); void onStopManagedOllama?.(); }}
+      />
       <ConfirmModal
         open={confirmMode === 'eject'}
         title="Prepare External Drive for Safe Removal"
         description="Stop active model operations, flush pending writes, and eject the external model library volume?"
         confirmLabel="Eject Safely"
+        variant="danger"
         onCancel={() => setConfirmMode(null)}
-        onConfirm={() => {
-          setConfirmMode(null);
-          void onSafeEject();
-        }}
+        onConfirm={() => { setConfirmMode(null); void onSafeEject(); }}
       />
-
       <ConfirmModal
         open={confirmMode === 'migrate'}
         title="Copy Internal Ollama Models to External Drive"
-        description={`Copy ${migrationPreview?.blob_count ?? 0} blob(s) (${formatGiB(migrationPreview?.total_bytes ?? 0)}) from ${migrationPreview?.source_dir ?? '~/.ollama/models'} to your external library? Original internal files will not be deleted automatically.`}
+        description={`Copy ${migrationPreview?.blob_count ?? 0} blob(s) (${formatGiB(migrationPreview?.total_bytes ?? 0)}) from ${migrationPreview?.source_dir ?? '~/.ollama/models'} to your external library?`}
         confirmLabel="Copy to External Drive"
         onCancel={() => setConfirmMode(null)}
-        onConfirm={() => {
-          setConfirmMode(null);
-          void handleMigrate();
-        }}
+        onConfirm={() => { setConfirmMode(null); void handleMigrate(); }}
       />
     </div>
   );

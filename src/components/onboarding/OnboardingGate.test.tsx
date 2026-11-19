@@ -55,7 +55,7 @@ describe('OnboardingGate', () => {
       />
     );
 
-    const buttons = screen.getAllByRole('button', { name: /Use as MOSAIC Library/i });
+    const buttons = screen.getAllByRole('button', { name: /Use Library/i });
     expect(buttons[0]).toBeDisabled();
     expect(buttons[1]).toBeEnabled();
     fireEvent.click(buttons[1]);

@@ -39,8 +39,16 @@ pub fn validate_loopback_endpoint(endpoint: &str) -> Result<reqwest::Url, Ollama
     let url = reqwest::Url::parse(endpoint)
         .map_err(|_| OllamaError::NonLoopbackEndpoint(endpoint.to_string()))?;
     let host = url.host_str().unwrap_or("");
-    let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
-    if url.scheme() == "http" && is_loopback {
+    let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]";
+    let clean_path = url.path().is_empty() || url.path() == "/";
+    if url.scheme() == "http"
+        && is_loopback
+        && url.username().is_empty()
+        && url.password().is_none()
+        && clean_path
+        && url.query().is_none()
+        && url.fragment().is_none()
+    {
         Ok(url)
     } else {
         Err(OllamaError::NonLoopbackEndpoint(endpoint.to_string()))
@@ -188,10 +196,16 @@ mod tests {
     #[test]
     fn enforces_loopback_endpoints() {
         assert!(validate_loopback_endpoint("http://127.0.0.1:11434").is_ok());
+        assert!(validate_loopback_endpoint("http://127.0.0.1:11434/").is_ok());
         assert!(validate_loopback_endpoint("http://localhost:11434").is_ok());
+        assert!(validate_loopback_endpoint("http://[::1]:11434").is_ok());
         assert!(validate_loopback_endpoint("http://0.0.0.0:11434").is_err());
         assert!(validate_loopback_endpoint("http://192.168.1.50:11434").is_err());
         assert!(validate_loopback_endpoint("http://169.254.169.254/latest").is_err());
+        assert!(validate_loopback_endpoint("http://user:pass@127.0.0.1:11434").is_err());
+        assert!(validate_loopback_endpoint("http://127.0.0.1:11434/proxy").is_err());
+        assert!(validate_loopback_endpoint("http://127.0.0.1:11434/?x=1").is_err());
+        assert!(validate_loopback_endpoint("http://127.0.0.1:11434/#frag").is_err());
     }
 
     #[test]

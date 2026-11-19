@@ -52,13 +52,15 @@ export function AppShell({
     <div className="mosaic-shell">
       <header className="mosaic-topbar">
         <div className="mosaic-brand">
-          <Cpu size={20} color="#2878B8" aria-hidden="true" />
+          <Cpu size={20} className="mosaic-icon-accent" aria-hidden="true" />
           <span>MOSAIC</span>
         </div>
         <div className="mosaic-topbar-meta">
           <span
             className={
-              state?.library_connected ? 'mosaic-badge mosaic-badge-success' : 'mosaic-badge mosaic-badge-warn'
+              state?.library_connected
+                ? 'mosaic-badge mosaic-badge-success'
+                : 'mosaic-badge mosaic-badge-warn'
             }
           >
             <HardDrive size={12} aria-hidden="true" />
@@ -66,7 +68,9 @@ export function AppShell({
           </span>
           <span
             className={
-              state?.ollama.api_reachable ? 'mosaic-badge' : 'mosaic-badge mosaic-badge-warn'
+              state?.ollama.api_reachable
+                ? 'mosaic-badge mosaic-badge-success'
+                : 'mosaic-badge mosaic-badge-warn'
             }
           >
             {ollamaBadge}
@@ -103,7 +107,9 @@ export function AppShell({
           })}
         </nav>
 
-        <main className="mosaic-content">{children}</main>
+        <div className="mosaic-main">
+          <main className="mosaic-content">{children}</main>
+        </div>
       </div>
 
       <footer className="mosaic-statusbar" role="status" aria-live="polite">

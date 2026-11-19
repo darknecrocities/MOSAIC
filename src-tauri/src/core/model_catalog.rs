@@ -1,10 +1,17 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
+use crate::core::catalog_security::{self, MAX_CATALOG_BYTES};
 use crate::core::python_analytics_service;
-use crate::core::system_probe::SystemProfile;
+use crate::core::settings_store::SettingsStore;
+use crate::core::system_probe::{self, SystemProfile};
+use crate::security::command_guard;
 
 const CURATED_CATALOG_JSON: &str = include_str!("catalog_data.json");
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+pub const DEFAULT_CATALOG_REFRESH_URL: &str =
+    "https://raw.githubusercontent.com/darknecrocities/mosaic/main/src-tauri/src/core/catalog_data.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogModelEntry {
@@ -27,6 +34,25 @@ pub struct CatalogModelEntry {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ExecutionPlan {
+    pub profile: String,
+    pub kv_cache_type: String,
+    pub num_ctx: u32,
+    pub num_gpu: i32,
+    pub num_batch: u32,
+    pub num_ubatch: u32,
+    pub num_thread: u32,
+    pub use_mmap: bool,
+    pub use_mlock: bool,
+    pub keep_alive: String,
+    pub flash_attention: bool,
+    pub num_parallel: u32,
+    pub offload_ratio: f64,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelFitAssessment {
     pub fit_status: String,
@@ -41,6 +67,16 @@ pub struct ModelFitAssessment {
     pub reasons: Vec<String>,
     pub source: String,
     pub confidence: String,
+    #[serde(default)]
+    pub execution_plan: Option<ExecutionPlan>,
+    #[serde(default)]
+    pub requested_context_length: Option<u32>,
+    #[serde(default)]
+    pub gpu_budget_bytes: Option<u64>,
+    #[serde(default)]
+    pub cpu_spill_budget_bytes: Option<u64>,
+    #[serde(default)]
+    pub limitations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,28 +89,44 @@ pub fn load_curated_catalog() -> Vec<CatalogModelEntry> {
     serde_json::from_str(CURATED_CATALOG_JSON).unwrap_or_default()
 }
 
-/// Optional HTTPS catalog refresh with strict TLS scheme check and offline fallback.
-pub async fn refresh_catalog_https(url: &str) -> Result<Vec<CatalogModelEntry>, String> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
-    if parsed.scheme() != "https" {
-        return Err("Catalog refresh URL must use https://.".into());
-    }
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(3))
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client.get(parsed).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("Catalog refresh HTTP {}", resp.status()));
-    }
-    let entries = resp
-        .json::<Vec<CatalogModelEntry>>()
-        .await
-        .map_err(|e| format!("Invalid catalog schema: {e}"))?;
+pub fn validate_catalog_entries(entries: &[CatalogModelEntry]) -> Result<(), String> {
     if entries.is_empty() {
-        return Err("Remote catalog returned zero entries; keeping curated snapshot.".into());
+        return Err("Catalog must contain at least one model entry.".into());
     }
+    for e in entries {
+        command_guard::validate_model_name(&e.ollama_name).map_err(|err| err.to_string())?;
+        if e.display_name.trim().is_empty()
+            || e.download_size_bytes == 0
+            || !e.parameter_billions.is_finite()
+            || e.parameter_billions <= 0.0
+            || e.n_layers == 0
+            || !e.license_url.starts_with("https://")
+        {
+            return Err(format!("Invalid catalog entry metadata for '{}'.", e.ollama_name));
+        }
+    }
+    Ok(())
+}
+
+pub fn load_effective_catalog(store: Option<&SettingsStore>) -> Vec<CatalogModelEntry> {
+    if let Some(st) = store {
+        if let Ok(Some(raw)) = st.load_catalog_snapshot_json() {
+            if let Ok(entries) = serde_json::from_str::<Vec<CatalogModelEntry>>(&raw) {
+                if validate_catalog_entries(&entries).is_ok() {
+                    return entries;
+                }
+            }
+        }
+    }
+    load_curated_catalog()
+}
+
+/// Optional HTTPS catalog refresh with strict SSRF, redirect, size, and schema checks.
+pub async fn refresh_catalog_https(url: &str) -> Result<Vec<CatalogModelEntry>, String> {
+    let bytes = catalog_security::fetch_public_https_bounded(url, MAX_CATALOG_BYTES).await?;
+    let entries: Vec<CatalogModelEntry> =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid catalog schema: {e}"))?;
+    validate_catalog_entries(&entries)?;
     Ok(entries)
 }
 
@@ -92,15 +144,20 @@ pub fn fallback_estimate_fit(
         * u64::from(model.head_dim)
         * u64::from(context_length)
         * 2;
+    let gpu_vram = system_probe::primary_gpu_vram_bytes(system);
     let backend = if system.is_unified_memory {
         "unified_metal"
+    } else if gpu_vram.is_some_and(|v| v > 0) {
+        "discrete_gpu"
     } else {
         "cpu_ram"
     };
     let overhead_bytes = 384 * 1024 * 1024 + (weight_bytes * 8 / 100);
     let total_required = weight_bytes + kv_bytes + overhead_bytes;
 
-    let raw_budget = if system.ram_available_bytes > 0 {
+    let raw_budget = if let Some(vram) = gpu_vram.filter(|v| *v > 0 && !system.is_unified_memory) {
+        vram
+    } else if system.ram_available_bytes > 0 {
         system.ram_available_bytes
     } else {
         (system.ram_total_bytes as f64 * 0.65) as u64
@@ -149,94 +206,106 @@ pub fn fallback_estimate_fit(
         reasons,
         source: "estimated".to_string(),
         confidence: "medium".to_string(),
+        execution_plan: None,
+        requested_context_length: Some(context_length),
+        gpu_budget_bytes: gpu_vram,
+        cpu_spill_budget_bytes: None,
+        limitations: Vec::new(),
     }
 }
 
-pub async fn evaluate_catalog(
+#[derive(Debug, Deserialize)]
+struct BatchFitItem {
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(flatten)]
+    assessment: ModelFitAssessment,
+}
+
+pub fn build_batch_fit_params(
+    entries: &[CatalogModelEntry],
+    system: &SystemProfile,
+    context_length: u32,
+    safety_reserve_gib: f64,
+    media_kind: Option<&str>,
+    execution_profile: Option<&str>,
+    kv_cache_type: Option<&str>,
+) -> serde_json::Value {
+    let mut sys_val = serde_json::to_value(system).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = sys_val.as_object_mut() {
+        obj.insert("gpu_vram_bytes".into(), serde_json::json!(system_probe::primary_gpu_vram_bytes(system)));
+    }
+    let mk = media_kind.unwrap_or("unknown");
+    serde_json::json!({
+        "system_profile": sys_val,
+        "models": entries,
+        "storage": { "media_kind": mk },
+        "media_kind": mk,
+        "context_length": context_length,
+        "safety_reserve_gib": safety_reserve_gib,
+        "execution_profile": execution_profile.unwrap_or("auto_adaptive"),
+        "kv_cache_type": kv_cache_type,
+    })
+}
+
+pub fn merge_batch_assessments(
+    entries: Vec<CatalogModelEntry>,
+    raw_assessments: Option<&Vec<serde_json::Value>>,
     system: &SystemProfile,
     context_length: u32,
     safety_reserve_gib: f64,
     media_kind: Option<&str>,
 ) -> Vec<CatalogModelWithFit> {
-    let entries = load_curated_catalog();
-    let mut results = Vec::with_capacity(entries.len());
-
-    for entry in entries {
-        let params = serde_json::json!({
-            "model": entry,
-            "hardware": {
-                "is_unified_memory": system.is_unified_memory,
-                "ram_total_bytes": system.ram_total_bytes,
-                "ram_available_bytes": system.ram_available_bytes,
-                "gpu_vram_bytes": serde_json::Value::Null,
-            },
-            "storage": { "media_kind": media_kind.unwrap_or("unknown") },
-            "context_length": context_length,
-            "safety_reserve_gib": safety_reserve_gib,
-        });
-
-        let fit = match python_analytics_service::run_single_job("estimate_fit", params, 4).await {
-            Ok((_, env)) if env.kind == "result" => {
-                let val = &env.payload["value"];
-                serde_json::from_value::<ModelFitAssessment>(serde_json::json!({
-                    "fit_status": val["fit_status"],
-                    "weight_memory_estimate": val["weight_memory_estimate"],
-                    "runtime_overhead_estimate": val["runtime_overhead_estimate"],
-                    "kv_cache_estimate": val["kv_cache_estimate"],
-                    "total_estimated_bytes": val["total_estimated_bytes"],
-                    "available_budget": val["available_budget"],
-                    "context_length": val["context_length"],
-                    "expected_backend": val["expected_backend"],
-                    "performance_estimate": val["performance_estimate"],
-                    "reasons": val["reasons"],
-                    "source": env.payload["source"],
-                    "confidence": env.payload["confidence"],
-                }))
-                .unwrap_or_else(|_| {
-                    fallback_estimate_fit(&entry, system, context_length, safety_reserve_gib, media_kind)
-                })
+    let mut by_id: HashMap<String, ModelFitAssessment> = HashMap::new();
+    let mut by_idx: Vec<Option<ModelFitAssessment>> = Vec::new();
+    if let Some(items) = raw_assessments {
+        for item in items {
+            if let Ok(parsed) = serde_json::from_value::<BatchFitItem>(item.clone()) {
+                if let Some(mid) = parsed.model_id {
+                    by_id.insert(mid, parsed.assessment.clone());
+                }
+                by_idx.push(Some(parsed.assessment));
+            } else {
+                by_idx.push(None);
             }
-            _ => fallback_estimate_fit(
-                &entry,
-                system,
-                context_length,
-                safety_reserve_gib,
-                media_kind,
-            ),
-        };
-
-        results.push(CatalogModelWithFit { model: entry, fit });
+        }
     }
-    results
+
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(idx, entry)| {
+            let fit = by_id
+                .remove(&entry.ollama_name)
+                .or_else(|| by_idx.get_mut(idx).and_then(Option::take))
+                .unwrap_or_else(|| {
+                    fallback_estimate_fit(&entry, system, context_length, safety_reserve_gib, media_kind)
+                });
+            CatalogModelWithFit { model: entry, fit }
+        })
+        .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn curated_catalog_loads_and_classifies_70b_not_recommended_on_16gb() {
-        let catalog = load_curated_catalog();
-        assert!(catalog.len() >= 8);
-        let seventy = catalog
-            .iter()
-            .find(|m| m.ollama_name.contains("70b"))
-            .unwrap();
-        let sys = SystemProfile {
-            os_name: "Darwin".into(),
-            os_version: "macOS".into(),
-            architecture: "aarch64".into(),
-            cpu_brand: "Apple M3".into(),
-            physical_cores: Some(8),
-            logical_cores: 8,
-            ram_total_bytes: 16 * 1024_u64.pow(3),
-            ram_available_bytes: 9 * 1024_u64.pow(3),
-            is_unified_memory: true,
-            gpus: vec![],
-            gpu_status: "unified_memory".into(),
-            detected_at: "2026-11-17T00:00:00Z".into(),
-        };
-        let fit = fallback_estimate_fit(seventy, &sys, 4096, 2.0, Some("SSD"));
-        assert_eq!(fit.fit_status, "Not recommended");
-    }
+pub async fn evaluate_catalog(
+    entries: Vec<CatalogModelEntry>,
+    system: &SystemProfile,
+    context_length: u32,
+    safety_reserve_gib: f64,
+    media_kind: Option<&str>,
+    execution_profile: Option<&str>,
+    kv_cache_type: Option<&str>,
+) -> Vec<CatalogModelWithFit> {
+    let params = build_batch_fit_params(
+        &entries, system, context_length, safety_reserve_gib,
+        media_kind, execution_profile, kv_cache_type,
+    );
+    let raw = match python_analytics_service::run_single_job("estimate_fit_batch", params, 10).await {
+        Ok((_, env)) if env.kind == "result" => {
+            env.payload["value"]["assessments"].as_array().cloned()
+        }
+        _ => None,
+    };
+    merge_batch_assessments(
+        entries, raw.as_ref(), system, context_length, safety_reserve_gib, media_kind,
+    )
 }

@@ -1,6 +1,12 @@
-import { useState } from 'react';
-import { Activity, Lock, Send, Square } from 'lucide-react';
-import type { ChatMessage, InstalledModel, ResourceTelemetry } from '../types/ipc';
+import { useEffect, useState } from 'react';
+import { Lock, Play, RotateCcw, Send, Square } from 'lucide-react';
+import type {
+  ChatMessage,
+  ExecutionProfile,
+  InstalledModel,
+  KvCacheType,
+  ResourceTelemetry,
+} from '../types/ipc';
 import { formatGiB } from '../utils/format';
 
 interface RunModelScreenProps {
@@ -11,11 +17,23 @@ interface RunModelScreenProps {
   streaming: boolean;
   messages: ChatMessage[];
   telemetry?: ResourceTelemetry | null;
+  defaultContextLength?: number;
+  executionProfile?: ExecutionProfile;
+  kvCacheType?: KvCacheType;
   onSelectModel: (name: string) => void;
-  onSendMessage: (prompt: string, numCtx: number, temperature: number) => void;
+  onSendMessage: (
+    prompt: string,
+    numCtx: number,
+    temperature: number,
+    opts?: { executionProfile: ExecutionProfile; kvCacheType: KvCacheType; numGpu: number | null }
+  ) => void;
   onStopGeneration: () => void;
   onUnloadModel: () => void;
+  onNewSession?: () => void;
+  onStartManagedOllama?: () => Promise<void>;
 }
+
+const RUN_CONTEXTS = [2048, 4096, 8192, 16384, 32768, 65536];
 
 export function RunModelScreen({
   models,
@@ -25,28 +43,56 @@ export function RunModelScreen({
   streaming,
   messages,
   telemetry,
+  defaultContextLength = 4096,
+  executionProfile: initialProfile = 'auto_adaptive',
+  kvCacheType: initialKv = 'auto',
   onSelectModel,
   onSendMessage,
   onStopGeneration,
   onUnloadModel,
+  onNewSession,
+  onStartManagedOllama,
 }: RunModelScreenProps) {
   const [prompt, setPrompt] = useState('');
-  const [numCtx, setNumCtx] = useState(4096);
+  const [numCtx, setNumCtx] = useState(defaultContextLength);
   const [temperature, setTemperature] = useState(0.2);
+  const [executionProfile, setExecutionProfile] = useState<ExecutionProfile>(initialProfile);
+  const [kvCacheType, setKvCacheType] = useState<KvCacheType>(initialKv);
+  const [numGpuRaw, setNumGpuRaw] = useState('');
+
+  useEffect(() => {
+    setNumCtx(defaultContextLength);
+  }, [defaultContextLength]);
+
+  useEffect(() => {
+    setExecutionProfile(initialProfile);
+  }, [initialProfile]);
+
+  useEffect(() => {
+    setKvCacheType(initialKv);
+  }, [initialKv]);
+
+  const contextOptions = RUN_CONTEXTS.includes(numCtx)
+    ? RUN_CONTEXTS
+    : [...RUN_CONTEXTS, numCtx].sort((a, b) => a - b);
 
   const canRun = libraryConnected && ollamaReachable && Boolean(selectedModel) && !streaming;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitPrompt = () => {
     const trimmed = prompt.trim();
     if (!trimmed || !canRun) return;
+    const parsedGpu = numGpuRaw.trim() === '' ? null : Number(numGpuRaw);
     setPrompt('');
-    onSendMessage(trimmed, numCtx, temperature);
+    onSendMessage(trimmed, numCtx, temperature, {
+      executionProfile,
+      kvCacheType,
+      numGpu: parsedGpu !== null && Number.isFinite(parsedGpu) ? parsedGpu : null,
+    });
   };
 
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
-      <section className="mosaic-panel" aria-labelledby="run-heading">
+    <div className="mosaic-run-workspace">
+      <section className="mosaic-panel-white" aria-label="Conversation">
         <div className="mosaic-panel-header">
           <div>
             <h2 id="run-heading">Run Model</h2>
@@ -54,26 +100,106 @@ export function RunModelScreen({
               In-memory session (conversations are not persisted by default)
             </span>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            {telemetry && (
-              <span className="mosaic-badge">
-                <Activity size={12} aria-hidden="true" />
-                <span>
-                  {formatGiB(telemetry.ram_available_bytes)} free /{' '}
-                  {formatGiB(telemetry.ram_total_bytes)}
-                </span>
-              </span>
-            )}
-            {ollamaReachable && (
-              <span className="mosaic-badge mosaic-badge-success">
-                <Lock size={12} aria-hidden="true" />
-                <span>Running locally through Ollama</span>
-              </span>
-            )}
-          </div>
+          {ollamaReachable && (
+            <span className="mosaic-caption-inline">
+              <Lock size={13} aria-hidden="true" />
+              <span>Running locally through Ollama</span>
+            </span>
+          )}
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+        {!ollamaReachable && libraryConnected && onStartManagedOllama && (
+          <div className="mosaic-callout mosaic-callout-warn mosaic-stack-sm">
+            <span>Ollama runtime is offline.</span>
+            <div className="mosaic-card-actions">
+              <button
+                type="button"
+                className="mosaic-button"
+                onClick={() => void onStartManagedOllama()}
+              >
+                <Play size={14} aria-hidden="true" />
+                <span>Start Managed Ollama</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {messages.length === 0 ? (
+          <p className="mosaic-subtitle">
+            {!libraryConnected
+              ? 'Connect your external drive before starting local inference.'
+              : 'Send a prompt to begin local streaming inference.'}
+          </p>
+        ) : (
+          <div className="mosaic-stack-sm">
+            {messages.map((msg, idx) => (
+              <div
+                key={`${msg.role}-${idx}`}
+                className={msg.role === 'user' ? 'mosaic-panel' : 'mosaic-panel-white'}
+              >
+                <strong>{msg.role === 'user' ? 'You' : selectedModel || 'Assistant'}</strong>
+                <p className="mosaic-prewrap">{msg.content}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitPrompt();
+          }}
+          className="mosaic-stack-sm"
+        >
+          <textarea
+            className="mosaic-textarea"
+            rows={2}
+            placeholder="Ask anything locally..."
+            aria-label="Prompt input"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submitPrompt();
+              }
+            }}
+            disabled={!libraryConnected || !ollamaReachable}
+          />
+          <div className="mosaic-card-actions">
+            {streaming ? (
+              <button type="button" className="mosaic-button-danger" onClick={onStopGeneration}>
+                <Square size={15} aria-hidden="true" />
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button type="submit" className="mosaic-button" disabled={!canRun || !prompt.trim()}>
+                <Send size={15} aria-hidden="true" />
+                <span>Send</span>
+              </button>
+            )}
+            {onNewSession && (
+              <button type="button" className="mosaic-button-secondary" onClick={onNewSession}>
+                <RotateCcw size={14} aria-hidden="true" />
+                <span>New Session</span>
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
+      <aside className="mosaic-panel mosaic-stack-sm" aria-label="Runtime parameters">
+        <h3>Runtime Parameters</h3>
+        {telemetry && (
+          <div className="mosaic-kv">
+            <span className="mosaic-kv-label">Free RAM</span>
+            <span className="mosaic-num">
+              {formatGiB(telemetry.ram_available_bytes)} / {formatGiB(telemetry.ram_total_bytes)}
+            </span>
+          </div>
+        )}
+        <label className="mosaic-field">
+          <span>Installed Model</span>
           <select
             className="mosaic-input"
             aria-label="Select installed model"
@@ -82,23 +208,66 @@ export function RunModelScreen({
           >
             <option value="">Select an installed model...</option>
             {models.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-              </option>
+              <option key={m.name} value={m.name}>{m.name}</option>
             ))}
           </select>
-
+        </label>
+        <label className="mosaic-field">
+          <span>Context Length</span>
           <select
             className="mosaic-input"
             aria-label="Context length"
             value={numCtx}
             onChange={(e) => setNumCtx(Number(e.target.value))}
           >
-            <option value={2048}>Context: 2,048</option>
-            <option value={4096}>Context: 4,096</option>
-            <option value={8192}>Context: 8,192</option>
+            {contextOptions.map((ctx) => (
+              <option key={ctx} value={ctx}>Context: {ctx.toLocaleString()}</option>
+            ))}
           </select>
-
+        </label>
+        <label className="mosaic-field">
+          <span>Execution Profile</span>
+          <select
+            className="mosaic-input"
+            aria-label="Execution profile"
+            value={executionProfile}
+            onChange={(e) => setExecutionProfile(e.target.value as ExecutionProfile)}
+          >
+            <option value="auto_adaptive">auto_adaptive</option>
+            <option value="max_quality">max_quality</option>
+            <option value="balanced">balanced</option>
+            <option value="constrained_memory">constrained_memory</option>
+          </select>
+        </label>
+        <label className="mosaic-field">
+          <span>KV Cache Quant</span>
+          <select
+            className="mosaic-input"
+            aria-label="KV cache"
+            value={kvCacheType}
+            onChange={(e) => setKvCacheType(e.target.value as KvCacheType)}
+          >
+            <option value="auto">auto</option>
+            <option value="f16">f16</option>
+            <option value="q8_0">q8_0</option>
+            <option value="q4_0">q4_0</option>
+          </select>
+        </label>
+        <label className="mosaic-field">
+          <span>GPU Layers (optional)</span>
+          <input
+            type="number"
+            className="mosaic-input"
+            aria-label="GPU layers"
+            placeholder="Auto"
+            min={0}
+            max={256}
+            value={numGpuRaw}
+            onChange={(e) => setNumGpuRaw(e.target.value)}
+          />
+        </label>
+        <label className="mosaic-field">
+          <span>Temperature</span>
           <input
             type="number"
             className="mosaic-input"
@@ -108,9 +277,9 @@ export function RunModelScreen({
             step={0.1}
             value={temperature}
             onChange={(e) => setTemperature(Number(e.target.value))}
-            style={{ width: 110 }}
           />
-
+        </label>
+        <div className="mosaic-card-actions">
           <button
             type="button"
             className="mosaic-button-secondary"
@@ -120,53 +289,7 @@ export function RunModelScreen({
             Unload Model
           </button>
         </div>
-      </section>
-
-      <section className="mosaic-panel-white" aria-label="Conversation">
-        {messages.length === 0 ? (
-          <p className="mosaic-subtitle">
-            {!libraryConnected
-              ? 'Connect your external drive before starting local inference.'
-              : 'Send a prompt to begin local streaming inference.'}
-          </p>
-        ) : (
-          <div style={{ display: 'grid', gap: 10 }}>
-            {messages.map((msg, idx) => (
-              <div
-                key={`${msg.role}-${idx}`}
-                className={msg.role === 'user' ? 'mosaic-panel' : 'mosaic-panel-white'}
-              >
-                <strong>{msg.role === 'user' ? 'You' : selectedModel || 'Assistant'}</strong>
-                <p style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <input
-            type="text"
-            className="mosaic-input"
-            style={{ flex: 1 }}
-            placeholder="Ask anything locally..."
-            aria-label="Prompt input"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            disabled={!libraryConnected || !ollamaReachable}
-          />
-          {streaming ? (
-            <button type="button" className="mosaic-button-secondary" onClick={onStopGeneration}>
-              <Square size={15} aria-hidden="true" />
-              <span>Stop</span>
-            </button>
-          ) : (
-            <button type="submit" className="mosaic-button" disabled={!canRun || !prompt.trim()}>
-              <Send size={15} aria-hidden="true" />
-              <span>Send</span>
-            </button>
-          )}
-        </form>
-      </section>
+      </aside>
     </div>
   );
 }

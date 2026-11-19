@@ -18,7 +18,7 @@ QUANT_BPW: dict[str, float] = {
     "IQ2_XS": 2.38, "Q2_K": 3.1, "IQ3_XXS": 3.12, "Q3_K_S": 3.50,
     "IQ3_M": 3.70, "Q3_K_M": 3.9, "Q3_K_L": 4.10, "IQ4_XS": 4.28,
     "Q4_0": 4.5, "Q4_K_M": 4.85, "Q5_K_S": 5.50, "Q5_K_M": 5.7,
-    "Q6_K": 6.6, "Q8_0": 8.5, "FP16": 16.0,
+    "Q6_K": 6.6, "Q8_0": 8.5, "F16": 16.0, "BF16": 16.0, "FP16": 16.0,
 }
 
 KV_BYTES_PER_ELEM: dict[str, float] = {"f16": 2.0, "q8_0": 1.0, "q4_0": 0.5}
@@ -130,8 +130,8 @@ def _assess_single_model(
     reasons: list[str] = []
     avail = budget.available_budget_bytes
     combined = budget.gpu_budget_bytes + budget.cpu_spill_budget_bytes
-    hybrid_discrete = (
-        budget.backend == "discrete_gpu"
+    hybrid_offload = (
+        budget.backend in {"discrete_gpu", "unified_metal"}
         and n_layers > 0
         and 0 < execution_plan["num_gpu"] < n_layers
         and total_required <= combined
@@ -148,12 +148,18 @@ def _assess_single_model(
             f"Estimated demand ({total_required / GIB:.1f} GiB) is near your "
             f"{avail / GIB:.1f} GiB budget; reduce context or close background apps."
         )
-    elif hybrid_discrete:
+    elif hybrid_offload:
         fit_status = "Borderline"
-        reasons.append(
-            f"Hybrid GPU/RAM offload ({execution_plan['num_gpu']}/{n_layers} layers in VRAM) "
-            f"fits combined {combined / GIB:.1f} GiB memory."
-        )
+        if budget.backend == "unified_metal":
+            reasons.append(
+                f"Hybrid Metal/unified RAM spill ({execution_plan['num_gpu']}/{n_layers} layers "
+                f"within Metal wired cap) fits combined {combined / GIB:.1f} GiB unified memory."
+            )
+        else:
+            reasons.append(
+                f"Hybrid GPU/RAM offload ({execution_plan['num_gpu']}/{n_layers} layers in VRAM) "
+                f"fits combined {combined / GIB:.1f} GiB memory."
+            )
     else:
         fit_status = "Not recommended"
         reasons.append(

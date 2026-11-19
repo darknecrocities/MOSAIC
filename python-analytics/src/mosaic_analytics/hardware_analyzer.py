@@ -100,13 +100,17 @@ def _probe_nvidia_smi() -> list[dict[str, Any]]:
         return []
     gpus: list[dict[str, Any]] = []
     for line in proc.stdout.splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 4:
+        if "," not in line:
             continue
+        idx_s, rest = line.split(",", 1)
+        tail = rest.rsplit(",", 2)
+        if len(tail) != 3:
+            continue
+        name_s, total_s, free_s = (p.strip() for p in tail)
         try:
-            idx = int(parts[0])
-            total_mib = float(parts[2])
-            free_mib = float(parts[3])
+            idx = int(idx_s.strip())
+            total_mib = float(total_s)
+            free_mib = float(free_s)
             if not (
                 math.isfinite(total_mib)
                 and math.isfinite(free_mib)
@@ -115,7 +119,7 @@ def _probe_nvidia_smi() -> list[dict[str, Any]]:
             ):
                 continue
             gpus.append({
-                "index": idx, "vendor": "nvidia", "model": parts[1],
+                "index": idx, "vendor": "nvidia", "model": name_s,
                 "vram_total_bytes": int(total_mib) * MIB,
                 "vram_free_bytes": int(free_mib) * MIB, "source": "measured",
             })

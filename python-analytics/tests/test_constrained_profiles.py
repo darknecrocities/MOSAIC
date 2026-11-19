@@ -176,3 +176,31 @@ def test_execution_profiles_and_hdd_warnings(
     )["value"]
     assert spill["execution_plan"]["use_mlock"] is False
     assert any("HDD" in w for w in spill["execution_plan"]["warnings"])
+
+
+def test_unified_metal_partial_offload_spill_classifies_borderline(
+    qwen3_30b_iq2, make_ctx
+) -> None:
+    res = assess_model_fit(
+        {
+            "model": qwen3_30b_iq2,
+            "hardware": {
+                "is_unified_memory": True,
+                "ram_total_bytes": 16 * GIB,
+                "ram_available_bytes": 14 * GIB,
+                "metal_wired_limit_bytes": int(9.5 * GIB),
+                "physical_cores": 8,
+            },
+            "storage": {"media_kind": "SSD"},
+            "context_length": 4096,
+            "safety_reserve_gib": 2.0,
+            "execution_profile": "constrained_memory",
+            "kv_cache_type": "q4_0",
+        },
+        make_ctx("metal-spill"),
+    )["value"]
+
+    assert res["expected_backend"] == "unified_metal"
+    assert res["execution_plan"]["num_gpu"] == 34
+    assert res["fit_status"] == "Borderline"
+    assert any("Metal" in r and "34/48" in r for r in res["reasons"])

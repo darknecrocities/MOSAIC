@@ -28,14 +28,14 @@ def test_stepped_down_plan_ctx_keeps_num_gpu_and_fit_consistent_16gb_14b(make_ct
         make_ctx("stepdown-14b"),
     )["value"]
     plan = res["execution_plan"]
-    assert plan["num_ctx"] == 2048
-    assert res["context_length"] == 2048
+    assert plan["num_ctx"] == 8192
+    assert res["context_length"] == 8192
     assert res["requested_context_length"] == 32768
     assert plan["num_gpu"] > 0
     assert plan["offload_ratio"] > 0.0
     assert not any("disk mmap" in w for w in plan["warnings"])
     assert not any("HDD" in w for w in plan["warnings"])
-    assert any("Context auto-adjusted from 32768 to 2048" in r for r in res["reasons"])
+    assert any("Context auto-adjusted from 32768 to 8192" in r for r in res["reasons"])
 
 
 def test_stepped_down_plan_ctx_8b_131k_consistent_recommended(make_ctx) -> None:
