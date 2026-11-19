@@ -103,4 +103,74 @@ describe('useMosaicRuntime', () => {
       expect(tauri.callsFor('cancel_pull')[0]?.args).toEqual({ model: 'qwen3:30b-a3b' });
     });
   });
+
+  it('surfaces list_catalog_with_fit errors in notice and syncs settings updates', async () => {
+    tauri.setHandler('list_catalog_with_fit', () => {
+      throw new Error('Catalog worker crashed');
+    });
+    const { result } = renderHook(() => useMosaicRuntime());
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+
+    act(() => {
+      result.current.setRoute('discover');
+    });
+    await waitFor(() => {
+      expect(result.current.notice).toMatch(/Catalog worker crashed/);
+    });
+
+    await act(async () => {
+      await result.current.handleSaveSetting('execution_profile', 'constrained_memory');
+      await result.current.handleSaveSetting('kv_cache_type', 'q4_0');
+      await result.current.handleSaveSetting('default_context_length', 16384);
+    });
+    expect(result.current.executionProfile).toBe('constrained_memory');
+    expect(result.current.kvCacheType).toBe('q4_0');
+    expect(result.current.contextLength).toBe(16384);
+  });
+
+  it('ignores superseded start_chat_stream rejection after rotating to a new session', async () => {
+    let rejectFirst!: (err: Error) => void;
+    let callNum = 0;
+    tauri.setHandler('start_chat_stream', () => {
+      callNum += 1;
+      if (callNum === 1) {
+        return new Promise((_, reject) => { rejectFirst = reject; });
+      }
+      return undefined;
+    });
+
+    const { result } = renderHook(() => useMosaicRuntime());
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+
+    const opts = {
+      numCtx: 4096,
+      temperature: 0.2,
+      executionProfile: 'auto_adaptive' as const,
+      kvCacheType: 'auto' as const,
+      numGpu: null,
+      keepAlive: '5m',
+    };
+
+    let firstPromise!: Promise<void>;
+    act(() => {
+      firstPromise = result.current.handleSendMessage('Old session prompt', opts);
+    });
+    expect(result.current.streaming).toBe(true);
+
+    act(() => {
+      result.current.handleNewSession();
+    });
+    await act(async () => {
+      await result.current.handleSendMessage('New session prompt', opts);
+    });
+    expect(result.current.streaming).toBe(true);
+
+    await act(async () => {
+      rejectFirst(new Error('Superseded stream failed'));
+      await firstPromise;
+    });
+
+    expect(result.current.streaming).toBe(true);
+    expect(result.current.notice).toBeNull();
+  });
 });

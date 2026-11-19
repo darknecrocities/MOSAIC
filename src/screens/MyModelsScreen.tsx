@@ -22,7 +22,6 @@ interface MyModelsScreenProps {
 }
 
 const BENCH_CONTEXTS = [2048, 4096, 8192, 16384, 32768];
-const BENCH_REPS = [2, 3, 4, 5];
 
 export function MyModelsScreen({
   models,
@@ -38,11 +37,16 @@ export function MyModelsScreen({
 }: MyModelsScreenProps) {
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
   const [benchContext, setBenchContext] = useState(4096);
-  const [benchReps, setBenchReps] = useState(2);
+  const [benchRepsRaw, setBenchRepsRaw] = useState('2');
   const [showTarget, setShowTarget] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState<ModelShowDetails | null>(null);
   const [showLoading, setShowLoading] = useState(false);
   const [showError, setShowError] = useState<string | null>(null);
+
+  const parsedReps = Number(benchRepsRaw);
+  const benchReps = Number.isFinite(parsedReps) && benchRepsRaw.trim() !== ''
+    ? Math.min(5, Math.max(2, Math.round(parsedReps)))
+    : 2;
 
   const handleInspectModel = async (name: string) => {
     setShowTarget(name);
@@ -89,16 +93,17 @@ export function MyModelsScreen({
           </label>
           <label className="mosaic-field">
             <span>Repetitions</span>
-            <select
+            <input
+              type="number"
+              min={2}
+              max={5}
+              step={1}
               className="mosaic-input"
               aria-label="Benchmark repetitions"
-              value={benchReps}
-              onChange={(e) => setBenchReps(Number(e.target.value))}
-            >
-              {BENCH_REPS.map((r) => (
-                <option key={r} value={r}>{r} runs</option>
-              ))}
-            </select>
+              value={benchRepsRaw}
+              onChange={(e) => setBenchRepsRaw(e.target.value)}
+              onBlur={() => setBenchRepsRaw(String(benchReps))}
+            />
           </label>
         </div>
 

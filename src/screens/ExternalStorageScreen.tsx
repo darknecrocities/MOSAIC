@@ -136,7 +136,7 @@ export function ExternalStorageScreen({
                 onClick={() => setConfirmMode('migrate')}
               >
                 <FolderSync size={15} aria-hidden="true" />
-                <span>Migrate Models ({formatGiB(migrationPreview.total_bytes)})</span>
+                <span>Migrate Internal Models ({formatGiB(migrationPreview.total_bytes)})</span>
               </button>
             )}
           </div>

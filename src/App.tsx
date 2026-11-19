@@ -111,6 +111,7 @@ export function App() {
           streaming={rt.streaming}
           messages={rt.messages}
           telemetry={rt.state?.telemetry}
+          defaultContextLength={rt.state?.settings.default_context_length ?? rt.contextLength}
           executionProfile={rt.executionProfile}
           kvCacheType={rt.kvCacheType}
           onSelectModel={rt.setSelectedModel}

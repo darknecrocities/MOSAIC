@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ConfirmModalProps {
@@ -23,7 +24,7 @@ export function ConfirmModal({
 }: ConfirmModalProps) {
   if (!open) return null;
 
-  return (
+  const modal = (
     <div
       className="mosaic-modal-backdrop"
       role="dialog"
@@ -58,4 +59,6 @@ export function ConfirmModal({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : modal;
 }

@@ -34,7 +34,7 @@ describe('SettingsScreen', () => {
     await waitFor(() => {
       expect(screen.getByText('Settings saved locally to SQLite.')).toBeInTheDocument();
     });
-    expect(onSaveSetting).toHaveBeenCalledTimes(13);
+    expect(onSaveSetting).toHaveBeenCalledTimes(1);
     expect(onSaveSetting).toHaveBeenCalledWith('safety_reserve_gib', 4);
 
     fireEvent.change(screen.getByLabelText('Worker name'), { target: { value: 'Node-B' } });
@@ -61,5 +61,33 @@ describe('SettingsScreen', () => {
     await waitFor(() => {
       expect(screen.getByText('No diagnostics entries recorded yet.')).toBeInTheDocument();
     });
+  });
+
+  it('saves only dirty keys and syncs form state when backend-clamped settings prop updates', async () => {
+    const onSaveSetting = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <SettingsScreen settings={SAMPLE_BOOTSTRAP.settings} onSaveSetting={onSaveSetting} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    await waitFor(() => {
+      expect(screen.getByText('Settings saved locally to SQLite.')).toBeInTheDocument();
+    });
+    expect(onSaveSetting).not.toHaveBeenCalled();
+
+    const reserveInput = screen.getByLabelText('OS Memory Safety Reserve (GiB)') as HTMLInputElement;
+    fireEvent.change(reserveInput, { target: { value: '100' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    await waitFor(() => {
+      expect(onSaveSetting).toHaveBeenCalledWith('safety_reserve_gib', 100);
+    });
+
+    rerender(
+      <SettingsScreen
+        settings={{ ...SAMPLE_BOOTSTRAP.settings, safety_reserve_gib: 64 }}
+        onSaveSetting={onSaveSetting}
+      />
+    );
+    expect(reserveInput.value).toBe('64');
   });
 });

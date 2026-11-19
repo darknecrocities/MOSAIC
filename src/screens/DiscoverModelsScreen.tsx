@@ -62,7 +62,12 @@ export function DiscoverModelsScreen({
 }: DiscoverModelsScreenProps) {
   const [query, setQuery] = useState('');
   const [fitFilter, setFitFilter] = useState<'All' | FitStatus>('All');
-  const [selected, setSelected] = useState<CatalogModelWithFit | null>(null);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+
+  const selected = useMemo(
+    () => (selectedName ? items.find((entry) => entry.model.ollama_name === selectedName) ?? null : null),
+    [items, selectedName]
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -185,7 +190,7 @@ export function DiscoverModelsScreen({
               libraryConnected={libraryConnected}
               freeBytes={freeBytes}
               pullingName={pullingName}
-              onViewDetails={setSelected}
+              onViewDetails={(entry) => setSelectedName(entry.model.ollama_name)}
               onPullModel={onPullModel}
             />
           ))}
@@ -198,7 +203,7 @@ export function DiscoverModelsScreen({
         freeBytes={freeBytes}
         pullingName={pullingName}
         onPullModel={onPullModel}
-        onClose={() => setSelected(null)}
+        onClose={() => setSelectedName(null)}
       />
     </div>
   );
