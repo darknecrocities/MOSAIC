@@ -130,8 +130,8 @@ def _assess_single_model(
     reasons: list[str] = []
     avail = budget.available_budget_bytes
     combined = budget.gpu_budget_bytes + budget.cpu_spill_budget_bytes
-    hybrid_discrete = (
-        budget.backend == "discrete_gpu"
+    hybrid_offload = (
+        budget.backend in {"discrete_gpu", "unified_metal"}
         and n_layers > 0
         and 0 < execution_plan["num_gpu"] < n_layers
         and total_required <= combined
@@ -148,12 +148,18 @@ def _assess_single_model(
             f"Estimated demand ({total_required / GIB:.1f} GiB) is near your "
             f"{avail / GIB:.1f} GiB budget; reduce context or close background apps."
         )
-    elif hybrid_discrete:
+    elif hybrid_offload:
         fit_status = "Borderline"
-        reasons.append(
-            f"Hybrid GPU/RAM offload ({execution_plan['num_gpu']}/{n_layers} layers in VRAM) "
-            f"fits combined {combined / GIB:.1f} GiB memory."
-        )
+        if budget.backend == "unified_metal":
+            reasons.append(
+                f"Hybrid Metal/unified RAM spill ({execution_plan['num_gpu']}/{n_layers} layers "
+                f"within Metal wired cap) fits combined {combined / GIB:.1f} GiB unified memory."
+            )
+        else:
+            reasons.append(
+                f"Hybrid GPU/RAM offload ({execution_plan['num_gpu']}/{n_layers} layers in VRAM) "
+                f"fits combined {combined / GIB:.1f} GiB memory."
+            )
     else:
         fit_status = "Not recommended"
         reasons.append(

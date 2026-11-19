@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::commands::benchmark_helpers::{
+    build_analyze_performance_params, compute_job_timeout_s, default_benchmark_options,
+    model_names_match, resolve_effective_kv,
+};
 use crate::commands::AppState;
 use crate::core::benchmark_store::{self, BenchmarkInput, BenchmarkReportRecord};
 use crate::core::{
-    model_library, ollama_manager, python_analytics_service, system_probe, telemetry, volume_manager,
+    model_catalog, model_library, ollama_manager, python_analytics_service, system_probe,
+    telemetry, volume_manager,
 };
 use crate::security::command_guard;
 
@@ -24,60 +29,6 @@ pub struct PerformanceAnalysisReport {
     pub confidence: String,
     #[serde(default)]
     pub limitations: Vec<String>,
-}
-
-fn default_benchmark_options(
-    profile: &str,
-    ctx: u32,
-    settings: &crate::core::settings_store::AppSettingsSnapshot,
-    system: &system_probe::SystemProfile,
-) -> serde_json::Value {
-    let (def_b, def_ub) = match profile {
-        "max_quality" => (512_u32, 512_u32),
-        "constrained_memory" => (128, 64),
-        "balanced" => (256, 128),
-        _ => {
-            if system.ram_total_bytes >= 24 * 1024_u64.pow(3) {
-                (512, 512)
-            } else {
-                (256, 128)
-            }
-        }
-    };
-    let threads = settings
-        .num_thread
-        .or_else(|| system.physical_cores.map(|c| c as u32))
-        .unwrap_or(4);
-    serde_json::json!({
-        "num_ctx": ctx,
-        "num_batch": settings.num_batch.unwrap_or(def_b),
-        "num_ubatch": settings.num_ubatch.unwrap_or(def_ub),
-        "num_thread": threads,
-        "use_mmap": true,
-        "use_mlock": false,
-    })
-}
-
-fn compute_job_timeout_s(
-    cold_load_timeout_s: Option<f64>,
-    model_size_bytes: Option<u64>,
-    media_kind: &str,
-    reps: u32,
-) -> (f64, u64) {
-    let cold_s = if let Some(explicit) = cold_load_timeout_s.filter(|v| v.is_finite() && *v > 0.0) {
-        explicit.max(30.0)
-    } else if let Some(sz) = model_size_bytes.filter(|v| *v > 0) {
-        let rate_bps = if media_kind.eq_ignore_ascii_case("SSD") || media_kind.eq_ignore_ascii_case("NVME") {
-            250.0 * 1024.0 * 1024.0
-        } else {
-            60.0 * 1024.0 * 1024.0
-        };
-        (((sz as f64) / rate_bps) * 1.5 + 60.0).clamp(180.0, 900.0)
-    } else {
-        180.0
-    };
-    let job_timeout = ((cold_s as u64) + u64::from(reps) * 120 + 60).clamp(360, 2400);
-    (cold_s, job_timeout)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -126,17 +77,43 @@ pub async fn run_model_benchmark(
         .ok()
         .and_then(|s| s.api_version.or(s.cli_version));
 
-    let effective_opts = options.unwrap_or_else(|| default_batches_opts(&profile, ctx, &settings, &system));
-    let (cold_s, job_timeout_s) = compute_job_timeout_s(cold_load_timeout_s, model_size_bytes, &media_kind, reps);
+    let effective_opts =
+        options.unwrap_or_else(|| default_benchmark_options(&profile, ctx, &settings, &system));
+    let effective_kv = resolve_effective_kv(&profile, kv_cache_type.as_deref(), &settings, &system);
+    let catalog_match = model_catalog::load_effective_catalog(Some(&state.store))
+        .into_iter()
+        .find(|e| model_names_match(&e.ollama_name, &model));
+    let n_layers = catalog_match.as_ref().map(|e| e.n_layers);
+    let mut offload_ratio = effective_opts.get("offload_ratio").and_then(|v| v.as_f64());
+    if offload_ratio.is_none() && effective_opts.get("num_gpu").is_none() {
+        if let Some(entry) = catalog_match.as_ref() {
+            let fit_params = serde_json::json!({
+                "model": entry, "system_profile": system,
+                "storage": { "media_kind": media_kind }, "context_length": ctx,
+                "safety_reserve_gib": settings.safety_reserve_gib,
+                "execution_profile": profile, "kv_cache_type": effective_kv,
+            });
+            if let Ok((_, fit_env)) =
+                python_analytics_service::run_single_job("estimate_fit", fit_params, 5).await
+            {
+                if fit_env.kind == "result" {
+                    offload_ratio =
+                        fit_env.payload["value"]["execution_plan"]["offload_ratio"].as_f64();
+                }
+            }
+        }
+    }
+    let (cold_s, job_timeout_s) =
+        compute_job_timeout_s(cold_load_timeout_s, model_size_bytes, &media_kind, reps);
 
     let _ = telemetry::log_diagnostic(
         &state.store,
         "info",
         "benchmark",
-        &format!("Started benchmark for {model} (ctx={ctx}, reps={reps}, profile={profile})"),
+        &format!("Started benchmark for {model} (ctx={ctx}, reps={reps}, profile={profile}, kv={effective_kv})"),
     );
 
-    let params = serde_json::json!({
+    let mut params = serde_json::json!({
         "endpoint": settings.ollama_endpoint,
         "model": model,
         "context_length": ctx,
@@ -145,15 +122,28 @@ pub async fn run_model_benchmark(
         "model_size_bytes": model_size_bytes,
         "media_kind": media_kind,
         "execution_profile": profile,
-        "kv_cache_type": kv_cache_type.unwrap_or_else(|| settings.kv_cache_type.clone()),
+        "kv_cache_type": effective_kv,
         "options": effective_opts,
         "keep_alive": settings.keep_alive,
     });
+    if let Some(obj) = params.as_object_mut() {
+        if let Some(layers) = n_layers {
+            obj.insert("n_layers".into(), serde_json::json!(layers));
+        }
+        if let Some(ratio) = offload_ratio {
+            obj.insert("offload_ratio".into(), serde_json::json!(ratio));
+        }
+    }
 
     let (_, env) = python_analytics_service::run_single_job("run_benchmark", params, job_timeout_s)
         .await
         .map_err(|e| {
-            let _ = telemetry::log_diagnostic(&state.store, "error", "benchmark", &format!("Benchmark error for {model}: {e}"));
+            let _ = telemetry::log_diagnostic(
+                &state.store,
+                "error",
+                "benchmark",
+                &format!("Benchmark error for {model}: {e}"),
+            );
             e.to_string()
         })?;
     if env.kind == "error" {
@@ -161,16 +151,19 @@ pub async fn run_model_benchmark(
             .as_str()
             .unwrap_or("Benchmark failed")
             .to_string();
-        let _ = telemetry::log_diagnostic(&state.store, "error", "benchmark", &format!("Benchmark failed for {model}: {msg}"));
+        let _ = telemetry::log_diagnostic(
+            &state.store,
+            "error",
+            "benchmark",
+            &format!("Benchmark failed for {model}: {msg}"),
+        );
         return Err(msg);
     }
 
     let val = &env.payload["value"];
-    let device_profile_id = state.store.latest_device_profile_id().ok().flatten();
-    let volume_id = state.store.active_volume_db_id().ok().flatten();
     let input = BenchmarkInput {
-        device_profile_id,
-        volume_id,
+        device_profile_id: state.store.latest_device_profile_id().ok().flatten(),
+        volume_id: state.store.active_volume_db_id().ok().flatten(),
         model_name: model.clone(),
         model_digest,
         quantization,
@@ -188,24 +181,13 @@ pub async fn run_model_benchmark(
 
     let saved = benchmark_store::save_benchmark_report(&state.store, &input)
         .map_err(|e| e.to_string())?;
-    let _ = telemetry::log_diagnostic(&state.store, "info", "benchmark", &format!("Completed benchmark {} for {model}", saved.id));
+    let _ = telemetry::log_diagnostic(
+        &state.store,
+        "info",
+        "benchmark",
+        &format!("Completed benchmark {} for {model}", saved.id),
+    );
     Ok(saved)
-}
-
-fn model_names_match(installed_name: &str, requested_name: &str) -> bool {
-    fn norm(s: &str) -> &str {
-        s.strip_suffix(":latest").unwrap_or(s)
-    }
-    installed_name == requested_name || norm(installed_name) == norm(requested_name)
-}
-
-fn default_batches_opts(
-    profile: &str,
-    ctx: u32,
-    settings: &crate::core::settings_store::AppSettingsSnapshot,
-    system: &system_probe::SystemProfile,
-) -> serde_json::Value {
-    default_benchmark_options(profile, ctx, settings, system)
 }
 
 #[tauri::command]
@@ -227,14 +209,14 @@ pub async fn analyze_benchmark_performance(
         .ok_or_else(|| "Benchmark report not found.".to_string())?;
     let raw_report: serde_json::Value =
         serde_json::from_str(&report.raw_report_json).unwrap_or_else(|_| serde_json::json!({}));
+    let settings = state.store.get_settings().map_err(|e| e.to_string())?;
     let system = system_probe::probe_system();
-    let params = serde_json::json!({
-        "report": raw_report,
-        "system_profile": system,
-        "storage": { "media_kind": report.storage_media_kind },
-        "media_kind": report.storage_media_kind,
-        "execution_plan": raw_report.get("applied_options"),
-    });
+    let params = build_analyze_performance_params(
+        &raw_report,
+        &report.storage_media_kind,
+        &system,
+        &settings,
+    );
     let (_, env) = python_analytics_service::run_single_job("analyze_performance", params, 8)
         .await
         .map_err(|e| e.to_string())?;
@@ -284,20 +266,4 @@ pub async fn export_benchmark_report(
         format: val["format"].as_str().unwrap_or(&format).to_string(),
         content: val["content"].as_str().unwrap_or("").to_string(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::model_names_match;
-
-    #[test]
-    fn model_names_match_normalizes_latest_tag() {
-        assert!(model_names_match("llama3.2:latest", "llama3.2"));
-        assert!(model_names_match("llama3.2", "llama3.2:latest"));
-        assert!(model_names_match(
-            "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS",
-            "hf.co/bartowski/Qwen_Qwen3-30B-A3B-GGUF:IQ2_XS"
-        ));
-        assert!(!model_names_match("llama3.2:3b", "llama3.2:1b"));
-    }
 }

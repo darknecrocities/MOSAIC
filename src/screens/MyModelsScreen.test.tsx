@@ -49,7 +49,10 @@ describe('MyModelsScreen', () => {
       expect(screen.getByText(/expert_count/)).toBeInTheDocument();
     });
     expect(tauri.callsFor('show_model_details')[0]?.args).toEqual({ model: modelName });
-    fireEvent.click(screen.getByRole('button', { name: 'Close model metadata' }));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
 
     const repsInput = screen.getByLabelText('Benchmark repetitions') as HTMLInputElement;
     expect(repsInput.tagName).toBe('INPUT');

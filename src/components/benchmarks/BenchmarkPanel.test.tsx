@@ -68,4 +68,37 @@ describe('BenchmarkPanel', () => {
       tauri.uninstall();
     }
   });
+
+  it('omits null/undefined efficiency ratios instead of rendering literal null', async () => {
+    const tauri = installTauriTestBridge({
+      analyze_benchmark_performance: () => ({
+        bottlenecks: [],
+        efficiency_ratios: {
+          cold_to_warm_load_ratio: 1.0,
+          memory_utilization_ratio: 0.73,
+          offload_ratio: null,
+        },
+        recommendations: [],
+        summary: 'No major hardware bottlenecks detected.',
+      }),
+    });
+
+    try {
+      render(
+        <BenchmarkPanel
+          benchmarkingModel={null}
+          onExport={vi.fn()}
+          reports={SAMPLE_REPORTS}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Analyze Bottlenecks/i }));
+      await waitFor(() => {
+        expect(screen.getByText('0.73')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('offload_ratio')).not.toBeInTheDocument();
+    } finally {
+      tauri.uninstall();
+    }
+  });
 });

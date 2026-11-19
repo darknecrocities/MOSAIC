@@ -308,7 +308,7 @@ function initTauriRuntime(initialState: MutableFixtureState): void {
         return { format: 'json', content: JSON.stringify(rep, null, 2) };
       }
       case 'analyze_hardware_insights': return { ram_total_bytes: state.bootstrap.system.ram_total_bytes, ram_effective_avail_bytes: state.bootstrap.system.ram_available_bytes, metal_wired_limit_bytes: state.bootstrap.system.is_unified_memory ? Math.round(10.66 * GIB) : null, gpu_devices: state.bootstrap.system.gpus, limitations: state.bootstrap.system.gpus.length === 0 ? ['No supported GPU telemetry library'] : [] };
-      case 'analyze_benchmark_performance': return { report_id: String(args.reportId ?? args.report_id ?? ''), bottlenecks: [{ category: 'storage_throughput', severity: 'medium', summary: 'ExFAT USB cold load overhead detected.' }], efficiency_ratio: 0.78, suggestions: ['Use q8_0 KV cache and warm-keep-alive for repeated prompts.'] };
+      case 'analyze_benchmark_performance': return { bottlenecks: [{ category: 'storage_throughput', severity: 'medium', explanation: 'ExFAT USB cold load overhead detected.' }], efficiency_ratios: { cold_to_warm_load_ratio: 11.47, memory_utilization_ratio: 0.18, offload_ratio: 1.0 }, recommendations: ['Use q8_0/q4_0 KV cache and warm keep_alive for repeated prompts.'], summary: 'Identified 1 potential constraint(s).', confidence: 'high', limitations: [] };
       default: throw `Unhandled mock Tauri command: ${cmd}`;
     }
   };

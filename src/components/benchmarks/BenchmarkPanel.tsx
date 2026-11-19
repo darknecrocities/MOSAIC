@@ -107,12 +107,15 @@ export function BenchmarkPanel({ reports, benchmarkingModel, onExport }: Benchma
                 {analysis && (
                   <div className="mosaic-panel mosaic-stack-sm" aria-label={`Performance analysis for ${r.model_name}`}>
                     {analysis.summary && <p className="mosaic-subtitle">{analysis.summary}</p>}
-                    {ratios && Object.entries(ratios).map(([k, v]) => (
-                      <div key={k} className="mosaic-kv">
-                        <span className="mosaic-kv-label">{k}</span>
-                        <span className="mosaic-num">{String(v)}</span>
-                      </div>
-                    ))}
+                    {ratios &&
+                      Object.entries(ratios)
+                        .filter(([, v]) => v !== null && v !== undefined)
+                        .map(([k, v]) => (
+                          <div key={k} className="mosaic-kv">
+                            <span className="mosaic-kv-label">{k}</span>
+                            <span className="mosaic-num">{String(v)}</span>
+                          </div>
+                        ))}
                     {analysis.bottlenecks.length > 0 && (
                       <ul className="mosaic-list">
                         {analysis.bottlenecks.map((b, idx) => {
